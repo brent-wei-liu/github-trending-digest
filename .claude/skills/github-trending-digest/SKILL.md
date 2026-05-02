@@ -16,6 +16,18 @@ Generate a daily Chinese-language digest of GitHub Trending across daily/weekly/
 
 ## Workflow
 
+### Web tool budget (applies across Steps 3 / 4 / 5)
+
+Each subagent may use `WebSearch` and `WebFetch` to verify or enrich content. **Hard cap = 20 calls total across all three steps**, split as:
+
+| Step | Budget | Use it for |
+|------|--------|------------|
+| Draft (3) | **5** | filling in repo / author / project context the raw data doesn't include |
+| Critique (4) | **10** | fact-checking project descriptions, verifying categorizations, catching wrong claims |
+| Refine (5) | **5** | resolving the specific factual corrections the critique flagged |
+
+When spawning each subagent, tell it explicitly: "you have N web tool calls available — use them on the highest-value facts first." Do not exceed the per-step budget; running over starves later steps. The budget is a hard ceiling, not a target — using fewer calls is fine if the content is solid.
+
 ### Step 1 — Refresh trending data (idempotent)
 
 ```bash
@@ -43,21 +55,29 @@ If `total_repos` is 0, abort and report — no fresh data.
 
 ### Step 3 — Draft (subagent #1)
 
-Spawn an Agent with `subagent_type=general-purpose`. Prompt = `prompts.draft` from Step 2. The prompt already contains the trending data inline (it's compact for GitHub trending unlike tweets, no separate file needed).
+Spawn an Agent with `subagent_type=general-purpose`. Prompt = `prompts.draft` from Step 2. The prompt already contains the trending data inline.
+
+**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to fill in context the trending data doesn't include — what a project actually does, who maintains it, why it might be trending today. Use these on the most impactful repos (top of list, novel names) before resorting to generic descriptions. Stay within 5 calls."
 
 Capture the returned draft text. Do not strip or reformat.
 
-### Step 4 — Critique (subagent #2, **ISOLATED**)
+### Step 4 — Critique (subagent #2, **DATA-ISOLATED**)
 
 Spawn an Agent with `subagent_type=general-purpose`. Give it ONLY:
 - The Critique template (`prompts.critique_template`) with `{draft}` substituted to the Step 3 output
-- **Do NOT pass the trending data again.** The critique subagent must judge prose quality only — categorization sense, description accuracy, trend insight, missing repos, readability — without seeing the raw repo list. This forces it to evaluate the digest on its own merits.
+- **Do NOT pass the trending data again.** The critique subagent must not see the raw repo list — that forces it to judge the digest on its own merits rather than checking it against a key.
+
+**However, append to the prompt**: "You may use WebSearch / WebFetch up to **10 times** to fact-check claims the draft makes — verify what each repo actually does, whether descriptions match upstream READMEs, whether categorizations make sense, whether the draft missed obvious headline projects from today. Web access is for *verification*, not for re-fetching the trending list. Spend the budget on the highest-value fact-checks first."
+
+This is the largest budget on purpose — a critic with internet beats a critic working from the prose alone, especially for project descriptions and categorization quality.
 
 Capture the critique text (ends with grade A / B / C).
 
 ### Step 5 — Refine (subagent #3)
 
 Spawn an Agent with `subagent_type=general-purpose`. Give it the Refine template with `{draft}` and `{critique}` substituted from Steps 3 and 4.
+
+**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to resolve specific factual corrections the critique flagged (e.g. confirming a project's real purpose if the critique disputed the description). Don't re-litigate the critique — use the budget only when correcting a flagged fact requires a lookup."
 
 Capture the final text.
 
