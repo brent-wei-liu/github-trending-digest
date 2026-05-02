@@ -57,7 +57,11 @@ If `total_repos` is 0, abort and report — no fresh data.
 
 Spawn an Agent with `subagent_type=general-purpose`. Prompt = `prompts.draft` from Step 2. The prompt already contains the trending data inline.
 
-**Append to the prompt**: "You may use WebSearch / WebFetch up to **5 times** to fill in context the trending data doesn't include — what a project actually does, who maintains it, why it might be trending today. Use these on the most impactful repos (top of list, novel names) before resorting to generic descriptions. Stay within 5 calls."
+**Append to the prompt — coverage rule (mandatory)**: Every weekly-trending repo in the input data MUST be mentioned by name in the draft, with at minimum a one-line description. Then decide which subset to give deeper coverage (3-5 sentences) based on impact / novelty / category fit. This prevents the Critique step (which is data-isolated) from missing repos that were silently dropped at Draft stage. If a weekly-trending repo seems uninteresting, still include it — let the Critique judge whether to keep or drop it. Coverage suggestions for the other periods:
+- **Daily**: aim to cover every entry; daily lists are typically smaller.
+- **Monthly**: cover the top 15-20 by impact; remaining go into a "其他值得关注" tail bullet list (one line each).
+
+**Append to the prompt — web budget**: "You may use WebSearch / WebFetch up to **5 times** to fill in context the trending data doesn't include — what a project actually does, who maintains it, why it might be trending today. Use these on the most impactful repos (top of list, novel names) before resorting to generic descriptions. Stay within 5 calls."
 
 Capture the returned draft text. Do not strip or reformat.
 
