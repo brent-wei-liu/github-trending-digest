@@ -1,2 +1,11 @@
 __pycache__/
 *.pyc
+.env
+
+# personal data
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.bak
+data/draft_*.md
+data/.fuse_hidden*

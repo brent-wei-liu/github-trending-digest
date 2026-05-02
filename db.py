@@ -108,4 +108,16 @@ def init_db(conn):
             [(n, d, r, now) for n, d, r in DEFAULT_FOCUS_PROFILES],
         )
 
+    # Migration: starred columns on repos (additive ALTER TABLE)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(repos)").fetchall()}
+    for col, typedef in [
+        ("starred", "INTEGER DEFAULT 0"),
+        ("starred_at", "TEXT DEFAULT NULL"),
+    ]:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE repos ADD COLUMN {col} {typedef}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_repos_starred ON repos(starred) WHERE starred = 1"
+    )
+
     conn.commit()

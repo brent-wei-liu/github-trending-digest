@@ -2,8 +2,8 @@
 """
 GitHub Trending Digest Generator — outputs trending data + 3-step prompt templates.
 
-Designed for Hermes cron: outputs JSON to stdout, agent orchestrates
-Draft → Critique → Refine via delegate_task.
+Outputs JSON to stdout. The Claude Code `github-trending-digest` skill
+orchestrates Draft → Critique → Refine via the Agent (Task) tool.
 
 Usage:
   python3 digest_generate.py query [--days 1] [--focus ai-ml]

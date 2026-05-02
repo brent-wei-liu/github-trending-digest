@@ -1,0 +1,21 @@
+# github-trending-digest scheduled tasks (declarative).
+#
+# To register on a fresh machine, open Cowork (Claude Code) in this project
+# and say: "Read schedules.yaml and register every task defined here."
+#
+# Times are local time (assumed PT for this codebase). Skill paths are
+# relative to the project root.
+#
+# {{REPO}} is replaced by the absolute path of this project's root at
+# registration time. Don't hardcode user-specific paths in this file.
+
+- name: github-trending-fetch
+  skill: null
+  script: cd {{REPO}} && python3 github_fetch.py
+  frequency: daily 09:30 PT
+  description: Scrape GitHub Trending HTML for daily / weekly / monthly periods into SQLite (single invocation handles all 3). No GitHub API token needed.
+
+- name: github-trending-digest
+  skill: .claude/skills/github-trending-digest
+  frequency: daily 11:30 PT
+  description: Three-step Draft / Critique / Refine reflection digest of today's trending repos. Save to summaries table + create Gmail draft via MCP.
