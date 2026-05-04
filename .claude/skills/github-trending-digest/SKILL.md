@@ -85,15 +85,36 @@ Spawn an Agent with `subagent_type=general-purpose`. Give it the Refine template
 
 Capture the final text.
 
-### Step 6 — Save to DB
+### Step 6 — Save to DB (MANDATORY — must succeed before Step 7)
+
+This step is **not optional**. If it fails, the whole pipeline must stop and surface the error — do NOT proceed to Step 7 (Gmail draft) on a save failure, or the recipient gets a digest that exists nowhere on disk authoritatively.
+
+Write the final text to a temp file (heredoc-safe), then pipe into save-summary. Capture the JSON return.
 
 ```bash
-echo "$FINAL_TEXT" | python3 digest_generate.py save-summary --days 1 --focus default
+TMP=$(mktemp -t gh_trending_digest.XXXXXX.md)
+printf '%s' "$FINAL_TEXT" > "$TMP"
+SAVE_RESULT=$(python3 digest_generate.py save-summary --days 1 --focus default < "$TMP")
+echo "$SAVE_RESULT"   # expect {"saved": true, "date": "YYYY-MM-DD", ...}
 ```
 
-(Use a heredoc or temp file in practice.)
+Then **verify** the row landed by reading back the latest summary id for today:
 
-Appends a row to the `summaries` table with today's date, period='daily', focus, content, created_at.
+```bash
+NEW_ID=$(sqlite3 data/gh_trending.db \
+  "SELECT id FROM summaries WHERE date='$(date -u +%Y-%m-%d)' ORDER BY id DESC LIMIT 1")
+test -n "$NEW_ID" || { echo "VERIFY FAILED: no row for today"; exit 1; }
+echo "saved as summary id=$NEW_ID"
+```
+
+**Fallback on failure** (DB locked / corrupted / disk full / verify came back empty): write the markdown to `data/orphan_digest_<YYYY-MM-DD>.md` and continue to Step 7 BUT prepend `[ORPHAN: not in DB] ` to the email subject so the user notices the archival gap.
+
+```bash
+# only if save-summary or VERIFY above failed
+DATE=$(date -u +%Y-%m-%d)
+cp "$TMP" "data/orphan_digest_${DATE}.md"
+ORPHAN=1   # set this flag, Step 7 reads it to mutate the subject
+```
 
 ### Step 7 — Create Gmail draft
 
@@ -102,7 +123,7 @@ Use the Gmail MCP `create_draft` tool to create (not send) a draft email contain
 **Convert the digest markdown to HTML before calling `create_draft`** — Gmail's UI does not render markdown. Pass BOTH:
 
 - `to`: read `DIGEST_RECIPIENT` from `<project>/.env` (parse `KEY=VALUE` lines, value of `DIGEST_RECIPIENT`). If missing, abort with a clear error.
-- `subject`: `GitHub Trending YYYY-MM-DD`
+- `subject`: `GitHub Trending YYYY-MM-DD` — but if Step 6 set `ORPHAN=1`, prepend `[ORPHAN: not in DB] ` so the user knows the digest didn't land in `summaries`.
 - `body`: the plain markdown text (fallback for non-HTML clients)
 - `htmlBody`: the rendered HTML (used by Gmail web/mobile)
 
