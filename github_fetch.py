@@ -47,10 +47,20 @@ def parse_trending_page(html):
         lang_m = re.search(r'itemprop="programmingLanguage"[^>]*>\s*(.*?)\s*<', block)
         language = lang_m.group(1).strip() if lang_m else None
 
-        stars_m = re.search(r'href="/[^"]+/stargazers"[^>]*>\s*([\d,]+)\s*<', block)
+        # GitHub Trending HTML wraps an <svg> inside the stargazers/forks
+        # link before the count, so we can't anchor on the link's opening
+        # `>`. Instead, look for the count between the link's </svg> and
+        # </a>. Counts may include commas (e.g. 12,345).
+        stars_m = re.search(
+            r'href="/[^"]+/stargazers"[^>]*>[\s\S]*?</svg>\s*([\d,]+)\s*</a>',
+            block,
+        )
         stars = int(stars_m.group(1).replace(",", "")) if stars_m else 0
 
-        forks_m = re.search(r'href="/[^"]+/forks"[^>]*>\s*([\d,]+)\s*<', block)
+        forks_m = re.search(
+            r'href="/[^"]+/forks"[^>]*>[\s\S]*?</svg>\s*([\d,]+)\s*</a>',
+            block,
+        )
         forks = int(forks_m.group(1).replace(",", "")) if forks_m else 0
 
         delta_m = re.search(r'([\d,]+)\s+stars\s+(today|this week|this month)', block)
