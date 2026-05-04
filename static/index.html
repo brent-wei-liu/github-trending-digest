@@ -671,13 +671,10 @@ main { position: relative; z-index: 1; }
   border-radius: 24px;
   max-width: 760px;
   width: 100%;
-  /* Flex column: header is fixed, body scrolls inside. Capped under
-     the viewport so we never need outer (backdrop) scroll either. */
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 100px);
-  overflow: hidden;     /* clip header bg into the rounded corners */
-  padding: 0;           /* moved to .modal-header / .modal-body */
+  /* Single-area modal: everything inside scrolls together with the
+     backdrop. Top padding is generous (64px) so the absolute-positioned
+     close button at top:14/right:14 never sits over title or body text. */
+  padding: 64px 28px 36px;
   position: relative;
   animation: modal-in 480ms var(--ease-flow) both;
   box-shadow: 0 30px 80px rgba(76, 67, 119, 0.32),
@@ -686,21 +683,6 @@ main { position: relative; z-index: 1; }
 @keyframes modal-in {
   from { opacity: 0; transform: translateY(40px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-.modal-header {
-  flex: 0 0 auto;       /* fixed-height row at top */
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 14px 18px 14px 24px;
-  border-bottom: 1px solid var(--line);
-  /* subtle tint so it visually separates from the scroll-body underneath */
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), transparent);
-  flex-wrap: wrap;
-}
-.modal-titles {
-  flex: 1 1 auto;
-  min-width: 0;
 }
 .modal-eyebrow {
   font-family: var(--font-ui);
@@ -718,23 +700,27 @@ main { position: relative; z-index: 1; }
   font-weight: 500;
   font-size: clamp(26px, 3.4vw, 36px);
   color: var(--ink);
-  margin: 0;
+  margin: 4px 0 4px;
   line-height: 1.05;
+  /* leave room on the right for the absolute-positioned close button (44px
+     wide at right:14, plus a comfort margin) so long dates don't slide
+     under it on narrow viewports */
+  padding-right: 60px;
 }
 .modal-meta {
   color: var(--ink-soft);
   font-size: 13px;
-  flex: 0 0 auto;
-  /* No margin-left:auto here — close button alone claims it, so the
-     header reads: title (grows) · meta (right of title) · close (far right). */
+  display: block;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 .modal-close {
-  /* Lives inside the modal-header flex row, pushed to the right end by
-     margin-left:auto. No absolute/fixed positioning — that's how it
-     ended up overlapping the body content in the previous fix. */
-  position: relative;
-  margin-left: auto;
-  flex: 0 0 auto;
+  /* Anchored to the modal's top-right. Scrolls with the modal (the
+     backdrop is the scroll container) — that's intentional; the modal
+     has 64px top-padding so the X never hovers over content text. */
+  position: absolute;
+  top: 14px; right: 14px;
   width: 44px; height: 44px;
   background: rgba(28, 36, 52, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -765,10 +751,6 @@ main { position: relative; z-index: 1; }
   color: var(--ink);
   font-size: 15px;
   line-height: 1.7;
-  flex: 1 1 auto;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 22px 28px 32px;
 }
 .modal-body h1 {
   font-family: var(--font-display);
@@ -912,7 +894,7 @@ main { position: relative; z-index: 1; }
   .repo-card { padding: 18px; border-radius: 18px; }
   .digest-row { grid-template-columns: 1fr auto; padding: 18px 20px; border-radius: 18px; gap: 12px; }
   .digest-meta { grid-column: 1 / -1; font-size: 12px; }
-  .modal { padding: 24px 22px 32px; border-radius: 20px; }
+  .modal { padding: 60px 22px 32px; border-radius: 20px; }
   .tabs-wrap, .periods-wrap { margin: 8px 12px; }
   .tab { padding: 9px 18px; }
   .period-btn { padding: 7px 14px; }
@@ -1006,14 +988,10 @@ main { position: relative; z-index: 1; }
 <!-- ===================== Modal ===================== -->
 <div class="modal-backdrop" id="modal-backdrop">
   <div class="modal" id="modal" role="dialog" aria-modal="true">
-    <header class="modal-header">
-      <div class="modal-titles">
-        <span class="modal-eyebrow">Digest</span>
-        <h2 class="modal-title" id="modal-title">…</h2>
-      </div>
-      <span class="modal-meta" id="modal-meta"></span>
-      <button class="modal-close" id="modal-close" aria-label="close">×</button>
-    </header>
+    <button class="modal-close" id="modal-close" aria-label="close">×</button>
+    <span class="modal-eyebrow">Digest</span>
+    <h2 class="modal-title" id="modal-title">…</h2>
+    <div class="modal-meta" id="modal-meta"></div>
     <div class="modal-body" id="modal-body"></div>
   </div>
 </div>
