@@ -143,6 +143,31 @@ python3 digest_generate.py query --days 1 --focus ai-ml | jq .meta
 python3 api.py
 ```
 
+## Testing
+
+End-to-end UI regression suite using Playwright (Python). Hits the real local API — does not mock, does not spawn the server itself.
+
+Install once:
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m playwright install chromium
+```
+
+Run (in a separate terminal from the running server):
+
+```bash
+python3 api.py                      # terminal 1 — keep the server up
+pytest tests/ui/                    # terminal 2 — run the suite
+```
+
+Useful flags:
+- `pytest tests/ui/ --headed` — watch the browser drive the page in real time
+- `pytest tests/ui/ -k digest` — run a single test by name fragment
+- `GITHUB_TRENDING_URL=http://192.168.1.x:8082 pytest tests/ui/` — point at a remote / phone-LAN server
+
+The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if the API isn't reachable the suite is cleanly skipped, not failed.
+
 ## Migration notes
 
 Evolved through OpenClaw → Hermes (`delegate_task` orchestration) → Claude Code (this version).
