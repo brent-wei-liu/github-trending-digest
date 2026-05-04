@@ -671,7 +671,13 @@ main { position: relative; z-index: 1; }
   border-radius: 24px;
   max-width: 760px;
   width: 100%;
-  padding: 32px 36px 44px;
+  /* Flex column: header is fixed, body scrolls inside. Capped under
+     the viewport so we never need outer (backdrop) scroll either. */
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 100px);
+  overflow: hidden;     /* clip header bg into the rounded corners */
+  padding: 0;           /* moved to .modal-header / .modal-body */
   position: relative;
   animation: modal-in 480ms var(--ease-flow) both;
   box-shadow: 0 30px 80px rgba(76, 67, 119, 0.32),
@@ -682,13 +688,19 @@ main { position: relative; z-index: 1; }
   to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 .modal-header {
+  flex: 0 0 auto;       /* fixed-height row at top */
   display: flex;
-  align-items: baseline;
-  gap: 18px;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px 14px 24px;
   border-bottom: 1px solid var(--line);
-  padding-bottom: 14px;
-  margin-bottom: 22px;
+  /* subtle tint so it visually separates from the scroll-body underneath */
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), transparent);
   flex-wrap: wrap;
+}
+.modal-titles {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 .modal-eyebrow {
   font-family: var(--font-ui);
@@ -712,16 +724,17 @@ main { position: relative; z-index: 1; }
 .modal-meta {
   color: var(--ink-soft);
   font-size: 13px;
-  margin-left: auto;
+  flex: 0 0 auto;
+  /* No margin-left:auto here — close button alone claims it, so the
+     header reads: title (grows) · meta (right of title) · close (far right). */
 }
 .modal-close {
-  /* Pinned to viewport so the X stays reachable however far the digest
-     scrolls. The modal-backdrop is the scroll container, so position
-     absolute on the modal element would let the button scroll out of
-     sight; fixed keeps it locked to viewport top-right. */
-  position: fixed;
-  top: 20px; right: 20px;
-  z-index: 110;        /* above modal (which lives at z-index 100) */
+  /* Lives inside the modal-header flex row, pushed to the right end by
+     margin-left:auto. No absolute/fixed positioning — that's how it
+     ended up overlapping the body content in the previous fix. */
+  position: relative;
+  margin-left: auto;
+  flex: 0 0 auto;
   width: 44px; height: 44px;
   background: rgba(28, 36, 52, 0.86);
   border: 1px solid rgba(255, 255, 255, 0.18);
@@ -748,7 +761,15 @@ main { position: relative; z-index: 1; }
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
-.modal-body { color: var(--ink); font-size: 15px; line-height: 1.7; }
+.modal-body {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.7;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 22px 28px 32px;
+}
 .modal-body h1 {
   font-family: var(--font-display);
   font-weight: 500;
@@ -985,13 +1006,13 @@ main { position: relative; z-index: 1; }
 <!-- ===================== Modal ===================== -->
 <div class="modal-backdrop" id="modal-backdrop">
   <div class="modal" id="modal" role="dialog" aria-modal="true">
-    <button class="modal-close" id="modal-close" aria-label="close">×</button>
     <header class="modal-header">
-      <div>
+      <div class="modal-titles">
         <span class="modal-eyebrow">Digest</span>
         <h2 class="modal-title" id="modal-title">…</h2>
       </div>
       <span class="modal-meta" id="modal-meta"></span>
+      <button class="modal-close" id="modal-close" aria-label="close">×</button>
     </header>
     <div class="modal-body" id="modal-body"></div>
   </div>
