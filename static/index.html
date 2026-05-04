@@ -674,7 +674,7 @@ main { position: relative; z-index: 1; }
   /* Single-area modal: everything inside scrolls together with the
      backdrop. Top padding is generous (64px) so the absolute-positioned
      close button at top:14/right:14 never sits over title or body text. */
-  padding: 64px 28px 36px;
+  padding: 28px 28px 36px;
   position: relative;
   animation: modal-in 480ms var(--ease-flow) both;
   box-shadow: 0 30px 80px rgba(76, 67, 119, 0.32),
@@ -693,6 +693,7 @@ main { position: relative; z-index: 1; }
   color: var(--accent-deep);
   display: block;
   margin-bottom: 6px;
+  padding-right: 60px; /* clear the absolute-positioned close button */
 }
 .modal-title {
   font-family: var(--font-display);
@@ -905,7 +906,7 @@ main { position: relative; z-index: 1; }
   .repo-card { padding: 18px; border-radius: 18px; }
   .digest-row { grid-template-columns: 1fr auto; padding: 18px 20px; border-radius: 18px; gap: 12px; }
   .digest-meta { grid-column: 1 / -1; font-size: 12px; }
-  .modal { padding: 60px 22px 32px; border-radius: 20px; }
+  .modal { padding: 22px 22px 32px; border-radius: 20px; }
   .tabs-wrap, .periods-wrap { margin: 8px 12px; }
   .tab { padding: 9px 18px; }
   .period-btn { padding: 7px 14px; }
