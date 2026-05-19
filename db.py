@@ -44,6 +44,10 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # 5s wait when a concurrent writer holds the lock — default 0 is the
+    # most plausible contributor to SQLite WAL corruption under always-on
+    # api.py + scheduled fetch. See ai-leaders-digest for prior-art.
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
