@@ -695,6 +695,52 @@ main { position: relative; z-index: 1; }
   color: var(--ink);
 }
 
+/* Back-to-top: organic-glass pill in the lower-right of the viewport.
+   Cornflower→deeper-blue gradient, blur-backed; fades up once the user
+   has scrolled past 300px. */
+.modal-top-btn {
+  position: fixed;
+  right: 28px;
+  bottom: 28px;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(110, 138, 200, 0.55);
+  background: linear-gradient(135deg, rgba(155, 180, 230, 0.95), rgba(79, 107, 170, 0.92));
+  color: #fff;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  z-index: 110;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 220ms ease, transform 220ms ease, box-shadow 220ms ease;
+  pointer-events: none;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.18) inset,
+    0 4px 18px rgba(28, 36, 52, 0.25),
+    0 0 18px rgba(110, 138, 200, 0.35);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+.modal-top-btn.visible {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.modal-top-btn:hover {
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.28) inset,
+    0 6px 22px rgba(28, 36, 52, 0.32),
+    0 0 24px rgba(110, 138, 200, 0.55);
+  transform: translateY(-2px);
+}
+.modal-top-btn:active { transform: translateY(0); }
+.modal-top-btn[hidden] { display: none !important; }
+
 /* ============================================================
    Modal — slides up like a frosted card
    ============================================================ */
@@ -1060,6 +1106,7 @@ main { position: relative; z-index: 1; }
     <button type="button" class="modal-read-toggle" id="modal-read-toggle" hidden>mark read</button>
     <div class="modal-body" id="modal-body"></div>
   </div>
+  <button type="button" class="modal-top-btn" id="modal-top-btn" aria-label="back to top" hidden>↑</button>
 </div>
 
 <footer class="site-footer">a slow river of code · refresh to gather</footer>
@@ -1273,12 +1320,28 @@ async function markDigestReadState(id, isRead) {
   } catch (e) { /* swallow */ }
 }
 
+(function wireBackToTop() {
+  const THRESHOLD = 300;
+  document.addEventListener('DOMContentLoaded', () => {
+    const backdrop = $('#modal-backdrop');
+    const btn = $('#modal-top-btn');
+    if (!backdrop || !btn) return;
+    btn.hidden = false;
+    btn.classList.remove('visible');
+    const update = () => btn.classList.toggle('visible', backdrop.scrollTop > THRESHOLD);
+    backdrop.addEventListener('scroll', update, { passive: true });
+    btn.addEventListener('click', () => backdrop.scrollTo({ top: 0, behavior: 'smooth' }));
+  });
+})();
+
 async function openDigest(id) {
   const backdrop = $('#modal-backdrop');
   $('#modal-title').textContent = 'Loading…';
   $('#modal-meta').textContent = '';
   $('#modal-body').innerHTML = loaderHTML('unfurling…');
   backdrop.classList.add('open');
+  backdrop.scrollTop = 0;
+  $('#modal-top-btn')?.classList.remove('visible');
   let s;
   try {
     s = await fetchJSON('/api/digests/' + id);

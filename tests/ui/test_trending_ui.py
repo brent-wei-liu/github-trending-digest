@@ -361,3 +361,44 @@ def test_digest_unread_toggle(page: Page, base_url: str):
     )
     assert final == 0
     page.locator("#modal-close").click()
+
+
+def test_digest_back_to_top(page: Page, base_url: str):
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    try:
+        page.wait_for_selector(".digest-row", timeout=5_000)
+    except Exception:
+        pytest.skip("no digests")
+    page.locator(".digest-row").first.locator("[data-action='open']").click()
+    page.wait_for_selector(".modal-backdrop.open", timeout=3_000)
+    page.wait_for_function(
+        "() => { const b = document.getElementById('modal-body');"
+        " return b && b.innerText && b.innerText.length > 100; }",
+        timeout=5_000,
+    )
+    btn = page.locator("#modal-top-btn")
+    max_scroll = page.evaluate(
+        "const b = document.getElementById('modal-backdrop'); b.scrollHeight - b.clientHeight"
+    )
+    if max_scroll < 400:
+        pytest.skip(f"digest too short ({max_scroll}px)")
+    expect(btn).not_to_have_class(re.compile(r"\bvisible\b"))
+    page.evaluate(
+        "const b = document.getElementById('modal-backdrop'); "
+        "b.scrollTo({top: Math.min(b.scrollHeight - b.clientHeight, 600), behavior: 'instant'});"
+    )
+    page.wait_for_function(
+        "() => document.getElementById('modal-top-btn').classList.contains('visible')",
+        timeout=2_000,
+    )
+    btn.click()
+    page.wait_for_function(
+        "() => document.getElementById('modal-backdrop').scrollTop < 10",
+        timeout=2_000,
+    )
+    page.wait_for_function(
+        "() => !document.getElementById('modal-top-btn').classList.contains('visible')",
+        timeout=2_000,
+    )
+    page.locator("#modal-close").click()
