@@ -124,4 +124,13 @@ def init_db(conn):
         "CREATE INDEX IF NOT EXISTS idx_repos_starred ON repos(starred) WHERE starred = 1"
     )
 
+    # Migration: read/unread tracking on summaries (additive ALTER TABLE)
+    s_cols = {r[1] for r in conn.execute("PRAGMA table_info(summaries)").fetchall()}
+    for col, typedef in [
+        ("is_read", "INTEGER NOT NULL DEFAULT 0"),
+        ("read_at", "TEXT DEFAULT NULL"),
+    ]:
+        if col not in s_cols:
+            conn.execute(f"ALTER TABLE summaries ADD COLUMN {col} {typedef}")
+
     conn.commit()

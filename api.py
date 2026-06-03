@@ -155,6 +155,7 @@ def api_digests():
     try:
         rows = conn.execute(
             """SELECT id, date, period, focus, created_at,
+                      is_read, read_at,
                       LENGTH(content) AS content_length
                FROM summaries ORDER BY date DESC, id DESC"""
         ).fetchall()
@@ -173,6 +174,39 @@ def api_digest(digest_id: int):
         if not row:
             raise HTTPException(404, "digest not found")
         return dict(row)
+    finally:
+        conn.close()
+
+
+@app.post("/api/digests/{digest_id}/read")
+def api_digest_mark_read(digest_id: int):
+    conn = _conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "UPDATE summaries SET is_read = 1, read_at = ? WHERE id = ?",
+            (now, digest_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "digest not found")
+        return {"ok": True, "is_read": True, "read_at": now}
+    finally:
+        conn.close()
+
+
+@app.post("/api/digests/{digest_id}/unread")
+def api_digest_mark_unread(digest_id: int):
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "UPDATE summaries SET is_read = 0, read_at = NULL WHERE id = ?",
+            (digest_id,),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise HTTPException(404, "digest not found")
+        return {"ok": True, "is_read": False}
     finally:
         conn.close()
 

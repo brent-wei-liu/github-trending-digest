@@ -294,3 +294,70 @@ def test_stats_row_inline_star_button(page: Page, base_url: str):
         f".repo-meta has a next sibling, expected to be the last content block. "
         f"got: {next_sibling_html[:120]}..."
     )
+
+
+# ---------------------------------------------------------------------
+# H. Digest read/unread — opening a digest marks it read; toggle works
+# ---------------------------------------------------------------------
+
+def test_digest_mark_read_persists(page: Page, base_url: str):
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.wait_for_selector(".tab[data-tab='digests']", timeout=10_000)
+    page.locator(".tab[data-tab='digests']").click()
+    try:
+        page.wait_for_selector(".digest-row", timeout=5_000)
+    except Exception:
+        pytest.skip("no digests")
+
+    first = page.locator(".digest-row").first
+    digest_id = first.get_attribute("data-id")
+    page.evaluate("(id) => fetch('/api/digests/' + id + '/unread', {method:'POST'})", arg=digest_id)
+    page.reload(wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    page.wait_for_selector(".digest-row", timeout=5_000)
+    row = page.locator(f".digest-row[data-id='{digest_id}']")
+    expect(row).to_have_class(re.compile(r"\bis-unread\b"), timeout=3_000)
+
+    row.locator("[data-action='open']").click()
+    page.wait_for_function(
+        "(id) => document.querySelector(`.digest-row[data-id='${id}']`)?.dataset.isRead === '1'",
+        arg=digest_id, timeout=3_000,
+    )
+    expect(row).to_have_class(re.compile(r"\bis-read\b"), timeout=2_000)
+
+    page.locator("#modal-close").click()
+    page.wait_for_function("() => !document.querySelector('.modal-backdrop.open')", timeout=2_000)
+
+    page.reload(wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    page.wait_for_selector(f".digest-row[data-id='{digest_id}']", timeout=5_000)
+    expect(page.locator(f".digest-row[data-id='{digest_id}']")).to_have_class(re.compile(r"\bis-read\b"), timeout=3_000)
+
+
+def test_digest_unread_toggle(page: Page, base_url: str):
+    page.goto(base_url, wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    try:
+        page.wait_for_selector(".digest-row", timeout=5_000)
+    except Exception:
+        pytest.skip("no digests")
+
+    first = page.locator(".digest-row").first
+    digest_id = first.get_attribute("data-id")
+    page.evaluate("(id) => fetch('/api/digests/' + id + '/unread', {method:'POST'})", arg=digest_id)
+    page.reload(wait_until="domcontentloaded")
+    page.locator(".tab[data-tab='digests']").click()
+    page.wait_for_selector(f".digest-row[data-id='{digest_id}']", timeout=5_000)
+    page.locator(f".digest-row[data-id='{digest_id}'] [data-action='open']").click()
+
+    btn = page.locator("#modal-read-toggle")
+    expect(btn).to_be_visible(timeout=3_000)
+    expect(btn).to_have_text(re.compile(r"mark unread", re.I), timeout=3_000)
+    btn.click()
+    expect(btn).to_have_text(re.compile(r"mark read", re.I), timeout=3_000)
+    final = page.evaluate(
+        "async (id) => (await (await fetch('/api/digests/' + id)).json()).is_read",
+        arg=digest_id,
+    )
+    assert final == 0
+    page.locator("#modal-close").click()
