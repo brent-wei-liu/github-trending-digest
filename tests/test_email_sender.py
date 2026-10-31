@@ -31,12 +31,38 @@ class FakeSMTP:
     def starttls(self, context=None):
         self.tls = True
 
+    def ehlo(self):
+        self.esmtp_features = {"auth": " LOGIN PLAIN XOAUTH2"}
+
     def login(self, user, password):
         assert self.tls, "must STARTTLS before login"
         self.login_args = (user, password)
 
     def send_message(self, msg):
         self.sent = msg
+
+
+class GmailRejectingSMTP(email_sender.smtplib.SMTP):
+    """Real smtplib auth logic against a server that hangs up after one 535, as Gmail does."""
+
+    def __init__(self, host, port, timeout=None):
+        super().__init__()
+        self.auth_attempts = 0
+
+    def starttls(self, context=None):
+        pass
+
+    def ehlo(self, name=""):
+        self.ehlo_resp = b"ok"
+        self.does_esmtp = True
+        self.esmtp_features = {"auth": " LOGIN PLAIN XOAUTH2"}
+        return (250, b"ok")
+
+    def docmd(self, cmd, args=""):
+        if cmd == "AUTH" and self.auth_attempts == 0:
+            self.auth_attempts += 1
+            return (535, b"5.7.8 Username and Password not accepted. BadCredentials")
+        raise email_sender.smtplib.SMTPServerDisconnected("Connection unexpectedly closed")
 
 
 @pytest.fixture
@@ -154,4 +180,16 @@ def test_failed_send_is_not_logged(env, monkeypatch):
 
     monkeypatch.setattr(FakeSMTP, "login", boom)
     assert email_sender.main(["--date", "2026-01-02"]) == 1
+    assert email_sender.find_sent("2026-01-02") is None
+
+
+def test_bad_password_reports_535_not_disconnect(env, monkeypatch, capsys):
+    add_creds(env)
+    monkeypatch.setattr(email_sender.smtplib, "SMTP", GmailRejectingSMTP)
+    assert email_sender.main(["--date", "2026-01-02"]) == 1
+    out = capsys.readouterr().out
+    error = json.loads(out)["error"]
+    assert "SMTPAuthenticationError" in error
+    assert "535" in error and "BadCredentials" in error
+    assert "".join(SECRET.split()) not in out
     assert email_sender.find_sent("2026-01-02") is None

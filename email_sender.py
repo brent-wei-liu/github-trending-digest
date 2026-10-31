@@ -174,6 +174,10 @@ def build_message(sender, recipient, subject, body_md):
 def send_message(msg, user, password):
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=SMTP_TIMEOUT) as server:
         server.starttls(context=ssl.create_default_context())
+        server.ehlo()
+        # smtplib retries the next mechanism after a 535, but Gmail has hung up
+        # by then, so the real error would surface as SMTPServerDisconnected.
+        server.esmtp_features["auth"] = "PLAIN"
         # Google displays App Passwords in space-separated groups.
         server.login(user, "".join(password.split()))
         server.send_message(msg)
