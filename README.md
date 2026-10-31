@@ -20,7 +20,7 @@ Scrape GitHub Trending across daily / weekly / monthly periods, store in SQLite,
 │  └────────────────────────┘    │   4. Critique (isolated)    │   │
 │                                │   5. Refine subagent        │   │
 │                                │   6. save-summary           │   │
-│                                │   7. Gmail MCP create_draft │   │
+│                                │   7. email_sender.py (SMTP) │   │
 │                                │      (md + htmlBody)        │   │
 │                                └─────────────────────────────┘   │
 │                                              ↓                   │
@@ -52,7 +52,7 @@ github-trending-digest/
 ## Quick start
 
 1. Clone the repo.
-2. Copy `.env.example` to `.env` and set `DIGEST_RECIPIENT` to your address — digests are delivered as Gmail drafts via the Gmail MCP.
+2. Copy `.env.example` to `.env` and set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` — digests are sent via Gmail SMTP (see [Email delivery](#email-delivery)).
 3. On first run, the SQLite DB is auto-created (`init_db()` in `db.py`); the first `python3 github_fetch.py daily` populates it.
 4. Register the scheduled tasks per [Setup scheduled tasks](#setup-scheduled-tasks).
 5. (Optional) Launch the Web UI: `python3 api.py` → http://127.0.0.1:8082.
@@ -63,7 +63,7 @@ github-trending-digest/
 - **trending_entries** — one row per (repo, period, fetch_run); records rank, stars, stars_delta, forks at fetch time.
 - **summaries** — generated Chinese digests, one row per day per focus.
 - **focus_profiles** — saved filter configs (default / ai-ml / rust-go / frontend); choose which profile each digest uses.
-- **subscribers** — historical email subscriber list (legacy from cron mailer; not used by the current Gmail-MCP delivery path).
+- **subscribers** — historical email subscriber list (legacy from cron mailer; not used by the current delivery path).
 
 ## Three-step isolated reflection
 
@@ -119,11 +119,11 @@ Claude will use the `schedule` skill to create each task, copying the relevant S
 | Task | 时间 (PT) | 说明 |
 |------|----------|------|
 | `github-trending-fetch` | 09:30 | scrape daily/weekly/monthly trending into SQLite |
-| `github-trending-digest` | 11:30 | three-step reflection digest + Gmail draft |
+| `github-trending-digest` | 11:30 | three-step reflection digest + email via SMTP |
 
 ## Email delivery
 
-Digests are delivered as Gmail drafts via the Gmail MCP `create_draft` tool. Set `DIGEST_RECIPIENT` in `.env` (see `.env.example`) to your address. Open the draft in Gmail to review and send manually. The skill renders the markdown to HTML and passes BOTH `body` (markdown fallback) and `htmlBody` (rendered HTML for Gmail's UI) so the digest looks formatted in the inbox.
+Digests are sent by `email_sender.py` through `smtp.gmail.com:587` (STARTTLS) as plain text + rendered HTML. Set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` in `.env` (see `.env.example`); the App Password comes from https://myaccount.google.com/apppasswords and requires 2-Step Verification. Preview without sending using `python3 email_sender.py --dry-run`. If sending fails, the skill falls back to a Gmail draft via the Gmail MCP `create_draft` tool when that connector is available.
 
 ## Manual usage
 
@@ -173,7 +173,7 @@ The whole suite is gated by `_require_server` in `tests/ui/conftest.py` — if t
 Evolved through OpenClaw → Hermes (`delegate_task` orchestration) → Claude Code (this version).
 - `digest_generate.py` outputs JSON + 3-step Prompt templates; LLM calls now happen via the Claude Code `Agent` tool inside the `github-trending-digest` skill.
 - Scheduling moved from Hermes cron to Claude Code scheduled-tasks (`~/.claude/scheduled-tasks/`); no standalone daemon required.
-- Email path moved from cron-driven SMTP to Gmail MCP draft creation (no App Password needed; user reviews each draft before sending).
+- Email path moved from cron-driven SMTP to Gmail MCP draft creation, then back to SMTP via `email_sender.py` with the Gmail draft as a fallback (sent without manual review).
 
 ## Known limitations
 

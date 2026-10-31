@@ -10,7 +10,7 @@ description: >
 
 # GitHub Trending Digest
 
-Generate a daily Chinese-language digest of GitHub Trending across daily/weekly/monthly periods, using a three-step **isolated reflection** pipeline (Draft → Critique → Refine) followed by save + email-as-Gmail-draft.
+Generate a daily Chinese-language digest of GitHub Trending across daily/weekly/monthly periods, using a three-step **isolated reflection** pipeline (Draft → Critique → Refine) followed by save + email via Gmail SMTP.
 
 **Project root:** the directory containing this SKILL.md's grand-grandparent (`<project>/.claude/skills/github-trending-digest/SKILL.md`). The scheduled-task wrapper or invoking session should `cd` there before running any of the steps below.
 
@@ -87,7 +87,7 @@ Capture the final text.
 
 ### Step 6 — Save to DB (MANDATORY — must succeed before Step 7)
 
-This step is **not optional**. If it fails, the whole pipeline must stop and surface the error — do NOT proceed to Step 7 (Gmail draft) on a save failure, or the recipient gets a digest that exists nowhere on disk authoritatively.
+This step is **not optional**. If it fails, the whole pipeline must stop and surface the error — do NOT proceed to Step 7 (email) on a save failure unless the orphan fallback below has written the digest to disk, or the recipient gets a digest that exists nowhere on disk authoritatively.
 
 Write the final text to a temp file (heredoc-safe), then pipe into save-summary. Capture the JSON return.
 
@@ -116,86 +116,34 @@ cp "$TMP" "data/orphan_digest_${DATE}.md"
 ORPHAN=1   # set this flag, Step 7 reads it to mutate the subject
 ```
 
-### Step 7 — Create Gmail draft
+### Step 7 — Send email via SMTP
 
-Use the Gmail MCP `create_draft` tool to create (not send) a draft email containing the final digest. The user reviews in Gmail and sends manually.
+Run the sender **once** — it sends immediately, with no review step, so a repeat run delivers a duplicate. `save-summary` dates rows in UTC, so use the UTC date here:
 
-**Convert the digest markdown to HTML before calling `create_draft`** — Gmail's UI does not render markdown. Pass BOTH:
-
-- `to`: read `DIGEST_RECIPIENT` from `<project>/.env` (parse `KEY=VALUE` lines, value of `DIGEST_RECIPIENT`). If missing, abort with a clear error.
-- `subject`: `GitHub Trending YYYY-MM-DD` — but if Step 6 set `ORPHAN=1`, prepend `[ORPHAN: not in DB] ` so the user knows the digest didn't land in `summaries`.
-- `body`: the plain markdown text (fallback for non-HTML clients)
-- `htmlBody`: the rendered HTML (used by Gmail web/mobile)
-
-Renderer requirements:
-- Headings (`#` / `##` / `###`) → `<h1>` / `<h2>` / `<h3>`
-- Bullet lists (`- ` or `* `) → `<ul><li>`
-- Bold (`**text**`) → `<strong>`
-- Inline code (`` `x` ``) → `<code>`
-- Links `[text](url)` → `<a href="url">text</a>`
-- Blank lines separate paragraphs (`<p>`)
-- HTML-escape the source first
-
-Wrap in a minimal HTML shell with inline styles for readability:
-```html
-<!DOCTYPE html><html><body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:680px;margin:auto;padding:20px;line-height:1.5;color:#222;">
-  ...rendered content...
-</body></html>
+```bash
+DATE=$(date -u +%Y-%m-%d)
+python3 email_sender.py --date "$DATE"
+# only if Step 6 set ORPHAN=1 (subject gets the [ORPHAN: not in DB] prefix):
+python3 email_sender.py --date "$DATE" --file "data/orphan_digest_${DATE}.md" --orphan
 ```
 
-Prefer Python's `markdown` library if available (`python3 -c "import markdown; print(markdown.markdown(open('<file>').read()))"`). Otherwise inline a minimal converter:
+Success prints `{"sent": true, ...}` and exits 0. The sender reads `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` from `<project>/.env`, and renders the markdown to HTML with a plain-text alternative. Use `--dry-run` to render and print headers without connecting.
 
-```python
-import html, re
-def md_to_html(md):
-    safe = html.escape(md)
-    out, in_list, para = [], False, []
-    bold = re.compile(r'\*\*(.+?)\*\*')
-    code = re.compile(r'`([^`]+?)`')
-    link = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
-    def inline(s):
-        s = bold.sub(r'<strong>\1</strong>', s)
-        s = code.sub(r'<code>\1</code>', s)
-        s = link.sub(r'<a href="\2">\1</a>', s)
-        return s
-    def flush_para():
-        nonlocal para
-        if para:
-            out.append('<p>' + inline(' '.join(para).strip()) + '</p>')
-            para = []
-    def close_list():
-        nonlocal in_list
-        if in_list: out.append('</ul>'); in_list = False
-    for line in safe.split('\n'):
-        s = line.strip()
-        m = re.match(r'^(#{1,3})\s+(.+)$', s)
-        if m:
-            flush_para(); close_list()
-            lvl = len(m.group(1))
-            out.append(f'<h{lvl}>{inline(m.group(2))}</h{lvl}>')
-        elif s.startswith('- ') or s.startswith('* '):
-            flush_para()
-            if not in_list: out.append('<ul>'); in_list = True
-            out.append(f'<li>{inline(s[2:])}</li>')
-        elif not s:
-            flush_para(); close_list()
-        else:
-            close_list(); para.append(s)
-    flush_para(); close_list()
-    return ('<!DOCTYPE html><html><body style="font-family:-apple-system,'
-            'BlinkMacSystemFont,Segoe UI,sans-serif;max-width:680px;'
-            'margin:auto;padding:20px;line-height:1.5;color:#222;">'
-            + '\n'.join(out) + '</body></html>')
+**Fallback on a non-zero exit** (missing credentials, blocked network, auth failure): keep the error text for Step 8, then create a Gmail draft if the Gmail MCP `create_draft` tool is available. Do not retry the send.
+
+```bash
+python3 email_sender.py --date "$DATE" --dry-run --html-out "$(mktemp -t gh_trending_digest.XXXXXX.html)"
+# add --file/--orphan as above; the same renderer output becomes htmlBody
 ```
 
-If the Gmail MCP isn't available, surface that to the user — do not silently fall back.
+Pass `to` = `DIGEST_RECIPIENT`, `subject` = the Subject line from the dry-run output, `body` = the digest markdown, `htmlBody` = the rendered HTML file's contents. If the Gmail MCP isn't available, report the send failure — do not fail silently.
 
 ### Step 8 — Report
 
 Print briefly:
 - Total repos covered + per-period breakdown
 - Critique grade (A / B / C)
-- "Saved digest for {date}" + draft creation status (created with id `<id>` / Gmail MCP unavailable / error)
+- "Saved digest for {date}" + delivery status (sent via SMTP to `<recipient>` / SMTP failed with `<error>`, draft created with id `<id>` / SMTP failed with `<error>`, Gmail MCP unavailable)
 
 ## The three prompt templates (verbatim, embedded for self-containment)
 
