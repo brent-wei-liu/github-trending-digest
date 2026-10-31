@@ -8,4 +8,5 @@ data/*.db-shm
 data/*.db-wal
 data/*.bak
 data/draft_*.md
+data/email_sent.jsonl
 data/.fuse_hidden*

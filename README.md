@@ -123,7 +123,7 @@ Claude will use the `schedule` skill to create each task, copying the relevant S
 
 ## Email delivery
 
-Digests are sent by `email_sender.py` through `smtp.gmail.com:587` (STARTTLS) as plain text + rendered HTML. Set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` in `.env` (see `.env.example`); the App Password comes from https://myaccount.google.com/apppasswords and requires 2-Step Verification. Preview without sending using `python3 email_sender.py --dry-run`. If sending fails, the skill falls back to a Gmail draft via the Gmail MCP `create_draft` tool when that connector is available.
+Digests are sent by `email_sender.py` through `smtp.gmail.com:587` (STARTTLS) as plain text + rendered HTML. Set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` in `.env` (see `.env.example`); the App Password comes from https://myaccount.google.com/apppasswords and requires 2-Step Verification. Preview without sending using `python3 email_sender.py --dry-run`. Each digest date is sent once (logged in `data/email_sent.jsonl`); use `--force` to resend. If sending fails, the skill falls back to a Gmail draft via the Gmail MCP `create_draft` tool when that connector is available.
 
 ## Manual usage
 

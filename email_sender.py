@@ -5,6 +5,9 @@ Usage:
   python3 email_sender.py [--date YYYY-MM-DD] [--dry-run] [--html-out PATH]
   python3 email_sender.py --file data/orphan_digest_YYYY-MM-DD.md --orphan [--date YYYY-MM-DD]
 
+Each digest date is sent once: successful sends are logged to data/email_sent.jsonl
+and a later run for that date is skipped (exit 0, "skipped": true) unless --force.
+
 Without --date, sends the latest saved summary. Settings come from env vars,
 falling back to <project>/.env: DIGEST_RECIPIENT, GMAIL_SMTP_USER,
 GMAIL_APP_PASSWORD. The App Password requires 2-Step Verification; create one
@@ -31,6 +34,7 @@ from pathlib import Path
 from db import DB_PATH
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
+SENT_LOG_PATH = Path(__file__).resolve().parent / "data" / "email_sent.jsonl"
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 SMTP_TIMEOUT = 30
@@ -70,6 +74,31 @@ def load_summary(date=None):
     if not row:
         raise LookupError(f"no saved summary for {date or 'any date'}")
     return row
+
+
+def find_sent(date):
+    """Return the logged send for this digest date, or None."""
+    if not SENT_LOG_PATH.exists():
+        return None
+    for line in SENT_LOG_PATH.read_text(encoding="utf-8").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("date") == date:
+            return entry
+    return None
+
+
+def log_sent(date, recipient, subject):
+    entry = {
+        "date": date,
+        "to": recipient,
+        "subject": subject,
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+    }
+    with SENT_LOG_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
 def md_to_html(md):
@@ -163,6 +192,8 @@ def main(argv=None):
                     help="Prepend [ORPHAN: not in DB] to the subject")
     ap.add_argument("--dry-run", action="store_true",
                     help="Render and print headers without connecting or sending")
+    ap.add_argument("--force", action="store_true",
+                    help="Send even if this date's digest was already sent")
     ap.add_argument("--html-out", help="Also write the rendered HTML to this path")
     args = ap.parse_args(argv)
 
@@ -192,12 +223,20 @@ def main(argv=None):
     if args.html_out:
         Path(args.html_out).write_text(rendered, encoding="utf-8")
 
+    previous = find_sent(date)
     if args.dry_run:
         for key in ("Subject", "From", "To", "Date", "Message-ID", "Content-Type"):
             print(f"{key}: {msg[key]}")
         print(f"\n[dry-run] not sent. text={len(body)} chars, html={len(rendered)} chars")
         print(f"[dry-run] GMAIL_SMTP_USER: {'set' if user else 'MISSING'}, "
               f"GMAIL_APP_PASSWORD: {'set' if password else 'MISSING'}")
+        if previous:
+            print(f"[dry-run] already sent at {previous.get('sent_at')}; a real run would skip")
+        return 0
+
+    if previous and not args.force:
+        print(json.dumps({"sent": False, "skipped": True, "date": date,
+                          "sent_at": previous.get("sent_at")}, ensure_ascii=False))
         return 0
 
     missing = [k for k, v in (("GMAIL_SMTP_USER", user), ("GMAIL_APP_PASSWORD", password)) if not v]
@@ -208,7 +247,12 @@ def main(argv=None):
         send_message(msg, user, password)
     except (smtplib.SMTPException, OSError) as e:
         return fail(f"{type(e).__name__}: {e}", 1)
-    print(json.dumps({"sent": True, "to": recipient, "subject": subject}, ensure_ascii=False))
+    result = {"sent": True, "to": recipient, "subject": subject}
+    try:
+        log_sent(date, recipient, subject)
+    except OSError as e:
+        result["warning"] = f"sent, but could not log it, so a re-run would resend: {e}"
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

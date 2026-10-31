@@ -58,6 +58,7 @@ def env(tmp_path, monkeypatch):
     conn.close()
     monkeypatch.setattr(email_sender, "DB_PATH", str(db))
 
+    monkeypatch.setattr(email_sender, "SENT_LOG_PATH", tmp_path / "email_sent.jsonl")
     FakeSMTP.instances = []
     monkeypatch.setattr(email_sender.smtplib, "SMTP", FakeSMTP)
     return env_file
@@ -127,3 +128,30 @@ def test_unknown_date_and_smtp_errors_exit_1(env, monkeypatch, capsys):
     monkeypatch.setattr(FakeSMTP, "login", boom)
     assert email_sender.main([]) == 1
     assert SECRET not in capsys.readouterr().out
+
+
+def test_second_send_for_date_is_skipped_unless_forced(env, capsys):
+    add_creds(env)
+    assert email_sender.main(["--date", "2026-01-02"]) == 0
+    capsys.readouterr()
+
+    assert email_sender.main(["--date", "2026-01-02"]) == 0
+    assert json.loads(capsys.readouterr().out)["skipped"] is True
+    assert len(FakeSMTP.instances) == 1
+
+    assert email_sender.main(["--date", "2026-01-01"]) == 0
+    assert len(FakeSMTP.instances) == 2
+
+    assert email_sender.main(["--date", "2026-01-02", "--force"]) == 0
+    assert len(FakeSMTP.instances) == 3
+
+
+def test_failed_send_is_not_logged(env, monkeypatch):
+    add_creds(env)
+
+    def boom(*a, **k):
+        raise OSError("network down")
+
+    monkeypatch.setattr(FakeSMTP, "login", boom)
+    assert email_sender.main(["--date", "2026-01-02"]) == 1
+    assert email_sender.find_sent("2026-01-02") is None

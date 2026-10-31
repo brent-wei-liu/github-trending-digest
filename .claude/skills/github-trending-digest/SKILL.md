@@ -118,7 +118,7 @@ ORPHAN=1   # set this flag, Step 7 reads it to mutate the subject
 
 ### Step 7 — Send email via SMTP
 
-Run the sender **once** — it sends immediately, with no review step, so a repeat run delivers a duplicate. `save-summary` dates rows in UTC, so use the UTC date here:
+The sender sends immediately, with no review step. Each digest date goes out once: a repeat run prints `{"sent": false, "skipped": true, ...}` and exits 0 — treat that as delivered, create no draft, and don't pass `--force` unless the user asked for a resend. `save-summary` dates rows in UTC, so use the UTC date here:
 
 ```bash
 DATE=$(date -u +%Y-%m-%d)
@@ -143,7 +143,7 @@ Pass `to` = `DIGEST_RECIPIENT`, `subject` = the Subject line from the dry-run ou
 Print briefly:
 - Total repos covered + per-period breakdown
 - Critique grade (A / B / C)
-- "Saved digest for {date}" + delivery status (sent via SMTP to `<recipient>` / SMTP failed with `<error>`, draft created with id `<id>` / SMTP failed with `<error>`, Gmail MCP unavailable)
+- "Saved digest for {date}" + delivery status (sent via SMTP to `<recipient>` / already sent, skipped / SMTP failed with `<error>`, draft created with id `<id>` / SMTP failed with `<error>`, Gmail MCP unavailable)
 
 ## The three prompt templates (verbatim, embedded for self-containment)
 
