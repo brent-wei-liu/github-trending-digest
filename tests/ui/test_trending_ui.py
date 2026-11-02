@@ -16,50 +16,54 @@ def _open(page: Page, base_url: str):
 
 def _starred_count(page: Page) -> int:
     """Read the 'N starred' stat-pill in the header, or 0 if missing."""
-    pill = page.locator(".stat-pill", has_text="starred").first
-    if pill.count() == 0:
-        return 0
+    pill = _starred_pill(page)
+    pill.wait_for(timeout=5_000)
     text = pill.inner_text()
     m = re.search(r"(\d[\d,]*)", text)
     return int(m.group(1).replace(",", "")) if m else 0
+
+
+def _starred_pill(page: Page):
+    return page.locator(".stat-pill", has_text="starred").first
+
+
+def _first_unstarred_card(page: Page):
+    """First card the user hasn't starred. These tests run against the real DB,
+    so they must never toggle (and lose the timestamp of) one of the user's stars."""
+    card = page.locator(".repo-card:has(.star-btn:not(.starred))").first
+    if card.count() == 0:
+        pytest.skip("every visible repo is already starred")
+    return card
+
+
+def _wait_star_state(page: Page, repo_id: str, starred: bool):
+    expr = "" if starred else "!"
+    page.wait_for_function(
+        f"(id) => {expr}document.querySelector('[data-repo-id=\"' + id + '\"] .star-btn')"
+        ".classList.contains('starred')",
+        arg=repo_id, timeout=3_000,
+    )
 
 
 # ---------------------------------------------------------------------
 # A. Star toggle persists across reload + bumps header stat
 # ---------------------------------------------------------------------
 
-def test_star_toggle_persists(page: Page, base_url: str):
+def test_star_toggle_persists(page: Page, base_url: str, preserve_stars):
     _open(page, base_url)
 
-    first = page.locator(".repo-card").first
+    first = _first_unstarred_card(page)
     repo_id = first.get_attribute("data-repo-id")
-    star_btn = first.locator(".star-btn")
-
-    # If the first card happens to already be starred (sticky from a prior
-    # session/test), unstar it first to start clean.
-    if "starred" in (star_btn.get_attribute("class") or ""):
-        star_btn.click()
-        page.wait_for_function(
-            "(id) => !document.querySelector('[data-repo-id=\"' + id + '\"] .star-btn')"
-            ".classList.contains('starred')",
-            arg=repo_id, timeout=3_000,
-        )
+    star_btn = page.locator(f".repo-card[data-repo-id=\"{repo_id}\"] .star-btn")
 
     before = _starred_count(page)
 
     star_btn.click()
-    page.wait_for_function(
-        "(id) => document.querySelector('[data-repo-id=\"' + id + '\"] .star-btn')"
-        ".classList.contains('starred')",
-        arg=repo_id, timeout=3_000,
+    _wait_star_state(page, repo_id, True)
+    # The header pill re-renders only after a separate /api/stats fetch.
+    expect(_starred_pill(page)).to_contain_text(
+        re.compile(rf"\b{before + 1}\b"), timeout=5_000,
     )
-    # Header pill increments
-    page.wait_for_function(
-        f"() => /\\b{before + 1}\\b/.test(document.querySelector('.stat-pill:has-text(\"starred\")').innerText)",
-        timeout=3_000,
-    ) if False else None  # JS regex literal pain — fall back to direct read
-    after = _starred_count(page)
-    assert after == before + 1, f"starred count did not increment: {before} -> {after}"
 
     # Reload — DB persistence
     page.reload(wait_until="domcontentloaded")
@@ -71,10 +75,9 @@ def test_star_toggle_persists(page: Page, base_url: str):
 
     # Cleanup — unstar
     star_after_reload.click()
-    page.wait_for_function(
-        "(id) => !document.querySelector('[data-repo-id=\"' + id + '\"] .star-btn')"
-        ".classList.contains('starred')",
-        arg=repo_id, timeout=3_000,
+    _wait_star_state(page, repo_id, False)
+    expect(_starred_pill(page)).to_contain_text(
+        re.compile(rf"\b{before}\b"), timeout=5_000,
     )
 
 
@@ -117,22 +120,15 @@ def test_period_switch(page: Page, base_url: str):
 # C. Starred-only filter
 # ---------------------------------------------------------------------
 
-def test_starred_only_filter(page: Page, base_url: str):
+def test_starred_only_filter(page: Page, base_url: str, preserve_stars):
     _open(page, base_url)
 
-    first = page.locator(".repo-card").first
+    first = _first_unstarred_card(page)
     repo_id = first.get_attribute("data-repo-id")
-    full_name = first.locator(".repo-name a").inner_text().strip()
 
-    # Star the first repo
-    star_btn = first.locator(".star-btn")
-    if "starred" not in (star_btn.get_attribute("class") or ""):
-        star_btn.click()
-        page.wait_for_function(
-            "(id) => document.querySelector('[data-repo-id=\"' + id + '\"] .star-btn')"
-            ".classList.contains('starred')",
-            arg=repo_id, timeout=3_000,
-        )
+    # Star a repo
+    page.locator(f".repo-card[data-repo-id=\"{repo_id}\"] .star-btn").click()
+    _wait_star_state(page, repo_id, True)
 
     # Click "★ Starred" button
     starred_toggle = page.locator("#starred-toggle")
@@ -161,6 +157,7 @@ def test_starred_only_filter(page: Page, base_url: str):
 
     # Cleanup
     page.locator(f".repo-card[data-repo-id=\"{repo_id}\"] .star-btn").click()
+    _wait_star_state(page, repo_id, False)
 
 
 # ---------------------------------------------------------------------
@@ -185,7 +182,7 @@ def test_search_filter(page: Page, base_url: str):
     page.wait_for_function(
         f"(initial) => {{ "
         f"  const cards = document.querySelectorAll('.repo-card'); "
-        f"  if (cards.length === initial) return false; "
+        f"  if (cards.length === 0 || cards.length === initial) return false; "
         f"  return Array.from(cards).every(c => "
         f"    (c.querySelector('.repo-name a').innerText || '').toLowerCase().includes('{owner.lower()}')); "
         f"}}",

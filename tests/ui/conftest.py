@@ -4,6 +4,7 @@ Assumes `python3 api.py` is already running on port 8082. Tests do NOT
 spawn the server themselves (port-binding races + zombie-process pain).
 If the server isn't reachable, the suite is skipped with a clear reason.
 """
+import json
 import os
 
 import pytest
@@ -32,3 +33,22 @@ def _require_server(base_url: str):
             "run `python3 api.py` in another terminal first.",
             allow_module_level=True,
         )
+
+
+def _starred_ids(base_url: str) -> set[int]:
+    ids = set()
+    for period in ("daily", "weekly", "monthly"):
+        url = f"{base_url}/api/repos?period={period}&starred=true&days=90&page_size=200"
+        with urllib.request.urlopen(url, timeout=5) as r:
+            ids.update(repo["id"] for repo in json.load(r)["repos"])
+    return ids
+
+
+@pytest.fixture
+def preserve_stars(base_url: str):
+    """The suite runs against the real DB: unstar whatever a test starred, even if it fails."""
+    before = _starred_ids(base_url)
+    yield
+    for repo_id in _starred_ids(base_url) - before:
+        req = urllib.request.Request(f"{base_url}/api/repos/{repo_id}/unstar", method="POST")
+        urllib.request.urlopen(req, timeout=5).close()
