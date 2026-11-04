@@ -36,7 +36,8 @@ Scrape GitHub Trending across daily / weekly / monthly periods, store in SQLite,
 ```
 github-trending-digest/
 ├── github_fetch.py        # scrape https://github.com/trending HTML
-├── digest_generate.py     # query SQLite + emit 3-step Prompt JSON
+├── repo_meta.py           # GitHub API metadata (created_at, license, owner type), cached in repo_meta table
+├── digest_generate.py     # today's payload (涨星榜/新锐榜 order, stats lines, ⚠️ 数据待核 flags) + 3-step prompts; `check` validates a digest
 ├── db.py                  # SQLite schema + migrations
 ├── api.py                 # FastAPI server (port 8082)
 ├── data/
@@ -123,7 +124,7 @@ Claude will use the `schedule` skill to create each task, copying the relevant S
 
 ## Email delivery
 
-Digests are sent by `email_sender.py` through `smtp.gmail.com:587` (STARTTLS) as plain text + rendered HTML. Set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` in `.env` (see `.env.example`); the App Password comes from https://myaccount.google.com/apppasswords and requires 2-Step Verification. Preview without sending using `python3 email_sender.py --dry-run`. Each digest date is sent once (logged in `data/email_sent.jsonl`); use `--force` to resend. If sending fails, the skill falls back to a Gmail draft via the Gmail MCP `create_draft` tool when that connector is available.
+Digests are sent by `email_sender.py` through `smtp.gmail.com:587` (STARTTLS) as a clean plain-text rendering (no raw markdown) + rendered HTML. Set `DIGEST_RECIPIENT`, `GMAIL_SMTP_USER` and `GMAIL_APP_PASSWORD` in `.env` (see `.env.example`); the App Password comes from https://myaccount.google.com/apppasswords and requires 2-Step Verification. Preview without sending using `python3 email_sender.py --dry-run`. Each digest date is sent once (logged in `data/email_sent.jsonl`); use `--force` to resend. If sending fails, the skill falls back to a Gmail draft via the Gmail MCP `create_draft` tool when that connector is available.
 
 ## Manual usage
 
@@ -137,7 +138,8 @@ python3 github_fetch.py monthly
 
 # inspect what's in the DB
 python3 digest_generate.py stats
-python3 digest_generate.py query --days 1 --focus ai-ml | jq .meta
+python3 digest_generate.py query --focus ai-ml | jq .meta      # latest scrape day; --date YYYY-MM-DD for an older one
+python3 digest_generate.py check path/to/digest.md             # exit 0 = numbers, coverage, ⚠️ flags all match the payload
 
 # launch web UI
 python3 api.py

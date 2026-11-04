@@ -102,6 +102,36 @@ def test_renderer_escapes_and_formats():
     assert "<script>" not in out
 
 
+def test_renderer_keeps_line_breaks_inside_items():
+    out = email_sender.md_to_html("### 1. [a/b](https://x) · 标题\n「AI」 · Rust\n**是什么**：x")
+    assert "<h3>1. <a href=\"https://x\">a/b</a> · 标题</h3>" in out
+    assert "<p>「AI」 · Rust<br>\n<strong>是什么</strong>：x</p>" in out
+
+
+def test_renderer_handles_ordered_lists_and_rules():
+    out = email_sender.md_to_html("## 今日 5 个必看\n1. **a** — x\n2. b\n\n- c\n\n---\n脚注")
+    assert "<ol>\n<li><strong>a</strong> — x</li>\n<li>b</li>\n</ol>" in out
+    assert "<ul>\n<li>c</li>\n</ul>" in out
+    assert "<hr>" in out and "<p>脚注</p>" in out
+
+
+def test_plain_text_alternative_is_not_raw_markdown():
+    md = (
+        "# GitHub Trending 日报 · 2026-11-04\n\n## 今日 5 个必看\n"
+        "1. **[a/b](https://github.com/a/b)** · ⭐111,693 — `cli` 工具\n\n"
+        "### 1. [e/f](https://github.com/e/f) · 标题\n\n## 工具\n- [c/d](https://github.com/c/d) · Rust · ⭐1,234\n\n---\n**口径**：x"
+    )
+    text = email_sender.md_to_text(md)
+    assert text.splitlines()[0] == "GitHub Trending 日报 · 2026-11-04"
+    assert "【今日 5 个必看】" in text and "【工具】" in text
+    assert "1. a/b (https://github.com/a/b) · ⭐111,693 — cli 工具" in text
+    assert "• c/d (https://github.com/c/d) · Rust · ⭐1,234" in text
+    assert "\n1. e/f (https://github.com/e/f) · 标题\n" in text
+    assert "口径：x" in text
+    for raw in ("**", "](", "## ", "`"):
+        assert raw not in text
+
+
 def test_dry_run_needs_no_creds_and_never_connects(env, capsys):
     assert email_sender.main(["--dry-run"]) == 0
     out = capsys.readouterr().out
@@ -131,7 +161,7 @@ def test_send_uses_starttls_and_latest_row_for_date(env, capsys):
     assert smtp.address == ("smtp.gmail.com", 587)
     assert smtp.login_args == ("me@example.com", "".join(SECRET.split()))
     plain, rendered = smtp.sent.get_payload()
-    assert plain.get_payload(decode=True).decode() == "# 最新 **b**"
+    assert plain.get_payload(decode=True).decode() == "最新 b"
     assert "<strong>b</strong>" in rendered.get_payload(decode=True).decode()
     assert SECRET not in capsys.readouterr().out
 

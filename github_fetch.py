@@ -141,6 +141,16 @@ def cmd_fetch(conn, args=None):
 
     conn.commit()
 
+    # Best-effort: cache created_at / license / owner type for today's repos.
+    try:
+        import repo_meta
+        names = sorted({r[0] for r in conn.execute(
+            "SELECT repo FROM trending_entries WHERE fetched_at = ?", (now,))})
+        meta = repo_meta.refresh(conn, names, repo_meta.get_token())
+        stats["repo_meta"] = {k: meta[k] for k in ("fetched", "cached")} | {"failed": len(meta["failed"])}
+    except Exception as e:  # metadata is optional; never fail the scrape over it
+        stats["repo_meta"] = {"error": f"{type(e).__name__}: {e}"}
+
     import zoneinfo
     local_hour = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).hour
     if report_hour is not None:

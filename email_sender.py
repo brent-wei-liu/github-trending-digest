@@ -101,46 +101,67 @@ def log_sent(date, recipient, subject):
         f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
 
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_CODE = re.compile(r"`([^`]+?)`")
+_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_HEADING = re.compile(r"^(#{1,3})\s+(.+)$")
+_OL_ITEM = re.compile(r"^\d+\.\s+(.+)$")
+_HR = re.compile(r"^(-{3,}|\*{3,})$")
+
+
 def md_to_html(md):
     """Minimal markdown → HTML for digest emails. Source is escaped first."""
     safe = html.escape(md)
-    out, in_list, para = [], False, []
-    bold = re.compile(r"\*\*(.+?)\*\*")
-    code = re.compile(r"`([^`]+?)`")
-    link = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+    out, para = [], []
+    list_tag = None  # "ul" / "ol" while inside a list
 
     def inline(s):
-        s = bold.sub(r"<strong>\1</strong>", s)
-        s = code.sub(r"<code>\1</code>", s)
-        s = link.sub(r'<a href="\2">\1</a>', s)
+        s = _BOLD.sub(r"<strong>\1</strong>", s)
+        s = _CODE.sub(r"<code>\1</code>", s)
+        s = _LINK.sub(r'<a href="\2">\1</a>', s)
         return s
 
     def flush_para():
         nonlocal para
         if para:
-            out.append("<p>" + inline(" ".join(para).strip()) + "</p>")
+            # Keep the digest's line breaks (tag / stats / 是什么 / 为什么涨 lines).
+            out.append("<p>" + "<br>\n".join(inline(x) for x in para) + "</p>")
             para = []
 
+    def open_list(tag):
+        nonlocal list_tag
+        if list_tag != tag:
+            close_list()
+            out.append(f"<{tag}>")
+            list_tag = tag
+
     def close_list():
-        nonlocal in_list
-        if in_list:
-            out.append("</ul>")
-            in_list = False
+        nonlocal list_tag
+        if list_tag:
+            out.append(f"</{list_tag}>")
+            list_tag = None
 
     for line in safe.split("\n"):
         s = line.strip()
-        m = re.match(r"^(#{1,3})\s+(.+)$", s)
+        m = _HEADING.match(s)
+        ol = _OL_ITEM.match(s)
         if m:
             flush_para()
             close_list()
             lvl = len(m.group(1))
             out.append(f"<h{lvl}>{inline(m.group(2))}</h{lvl}>")
+        elif _HR.match(s):
+            flush_para()
+            close_list()
+            out.append("<hr>")
         elif s.startswith("- ") or s.startswith("* "):
             flush_para()
-            if not in_list:
-                out.append("<ul>")
-                in_list = True
+            open_list("ul")
             out.append(f"<li>{inline(s[2:])}</li>")
+        elif ol:
+            flush_para()
+            open_list("ol")
+            out.append(f"<li>{inline(ol.group(1))}</li>")
         elif not s:
             flush_para()
             close_list()
@@ -158,15 +179,36 @@ def md_to_html(md):
     )
 
 
+def md_to_text(md):
+    """Markdown → readable plain text for the text/plain alternative."""
+    out = []
+    for line in md.split("\n"):
+        s = line.rstrip()
+        m = _HEADING.match(s.strip())
+        if m:
+            title = m.group(2)
+            s = f"【{title}】" if len(m.group(1)) == 2 else title
+        elif _HR.match(s.strip()):
+            s = "—" * 20
+        elif s.lstrip().startswith(("- ", "* ")):
+            indent = s[: len(s) - len(s.lstrip())]
+            s = indent + "• " + s.lstrip()[2:]
+        s = _BOLD.sub(r"\1", s)
+        s = _CODE.sub(r"\1", s)
+        s = _LINK.sub(lambda k: k.group(1) if k.group(1) == k.group(2) else f"{k.group(1)} ({k.group(2)})", s)
+        out.append(s)
+    return "\n".join(out)
+
+
 def build_message(sender, recipient, subject, body_md):
-    """Build a multipart/alternative message (plain markdown + rendered HTML)."""
+    """Build a multipart/alternative message (clean plain text + rendered HTML)."""
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = sender
     msg["To"] = recipient
     msg["Date"] = formatdate(localtime=True)
     msg["Message-ID"] = make_msgid(domain="github-trending-digest.local")
-    msg.attach(MIMEText(body_md, "plain", "utf-8"))
+    msg.attach(MIMEText(md_to_text(body_md), "plain", "utf-8"))
     msg.attach(MIMEText(md_to_html(body_md), "html", "utf-8"))
     return msg
 
