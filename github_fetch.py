@@ -141,13 +141,16 @@ def cmd_fetch(conn, args=None):
 
     conn.commit()
 
-    # Best-effort: cache created_at / license / owner type for today's repos.
+    # Best-effort: cache created_at / license / owner type and latest release for today's repos.
     try:
         import repo_meta
         names = sorted({r[0] for r in conn.execute(
             "SELECT repo FROM trending_entries WHERE fetched_at = ?", (now,))})
-        meta = repo_meta.refresh(conn, names, repo_meta.get_token())
+        token = repo_meta.get_token()
+        meta = repo_meta.refresh(conn, names, token)
         stats["repo_meta"] = {k: meta[k] for k in ("fetched", "cached")} | {"failed": len(meta["failed"])}
+        rel = repo_meta.refresh_releases(conn, names, token)
+        stats["repo_release"] = {k: rel[k] for k in ("fetched", "cached")} | {"failed": len(rel["failed"])}
     except Exception as e:  # metadata is optional; never fail the scrape over it
         stats["repo_meta"] = {"error": f"{type(e).__name__}: {e}"}
 

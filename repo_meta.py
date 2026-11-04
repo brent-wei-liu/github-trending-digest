@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Repo metadata from the GitHub REST API — created_at, license, owner type.
+Repo metadata from the GitHub REST API — created_at, license, owner type,
+plus the latest release/tag (evidence candidate for 「为什么涨」).
 
 Cached per repo in the `repo_meta` table (created_at never changes, so rows are
 only refreshed after META_TTL_DAYS). Auth: $GITHUB_TOKEN, else `gh auth token`,
@@ -23,6 +24,7 @@ from db import get_db, init_db
 
 API = "https://api.github.com"
 META_TTL_DAYS = 14
+RELEASE_TTL_HOURS = 12      # releases change often; refetch roughly once per daily run
 TIMEOUT = 15
 
 # Owners whose repos are tagged 大厂官方 (case-insensitive; prefix match covers
@@ -147,6 +149,64 @@ def refresh(conn, names, token=None, getter=api_get):
             "failed": failed}
 
 
+def ensure_release_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS repo_release (
+            full_name     TEXT PRIMARY KEY,
+            kind          TEXT,      -- 'release' | 'tag' | NULL (none found)
+            tag           TEXT,
+            title         TEXT,
+            published_at  TEXT,
+            fetched_at    TEXT NOT NULL
+        )
+    """)
+
+
+def latest_release(name, token=None, getter=api_get):
+    """Newest release (incl. prerelease), else newest tag with its commit date. None if neither."""
+    rels = getter(f"/repos/{name}/releases?per_page=1", token) or []
+    if rels:
+        r = rels[0]
+        return {"kind": "release", "tag": r.get("tag_name"),
+                "title": (r.get("name") or "").strip() or None,
+                "published_at": r.get("published_at") or r.get("created_at")}
+    tags = getter(f"/repos/{name}/tags?per_page=1", token) or []
+    if not tags:
+        return None
+    t = tags[0]
+    date = None
+    sha = (t.get("commit") or {}).get("sha")
+    if sha:
+        c = getter(f"/repos/{name}/commits/{sha}", token) or {}
+        date = ((c.get("commit") or {}).get("committer") or {}).get("date")
+    return {"kind": "tag", "tag": t.get("name"), "title": None, "published_at": date}
+
+
+def refresh_releases(conn, names, token=None, getter=api_get, now=None):
+    """Cache the latest release/tag per repo (TTL RELEASE_TTL_HOURS)."""
+    ensure_release_table(conn)
+    now = now or datetime.now(timezone.utc)
+    names = list(dict.fromkeys(names))
+    cutoff = (now - timedelta(hours=RELEASE_TTL_HOURS)).isoformat()
+    fresh = {r[0] for r in conn.execute(
+        f"SELECT full_name FROM repo_release WHERE fetched_at >= ? AND full_name IN ({','.join('?' * len(names))})",
+        (cutoff, *names))} if names else set()
+    failed, fetched = [], 0
+    for name in (n for n in names if n not in fresh):
+        try:
+            rel = latest_release(name, token, getter) or {}
+            conn.execute(
+                """INSERT OR REPLACE INTO repo_release
+                   (full_name, kind, tag, title, published_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?)""",
+                (name, rel.get("kind"), rel.get("tag"), rel.get("title"), rel.get("published_at"),
+                 now.isoformat()))
+            fetched += 1
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            failed.append(f"{name}: {type(e).__name__}: {getattr(e, 'code', '') or e}")
+    conn.commit()
+    return {"checked": len(names), "fetched": fetched, "cached": len(fresh), "failed": failed}
+
+
 def latest_repos(conn):
     row = conn.execute("SELECT MAX(DATE(fetched_at)) FROM trending_entries").fetchone()
     if not row or not row[0]:
@@ -159,7 +219,10 @@ def main():
     conn = get_db()
     init_db(conn)
     names = sys.argv[1:] or latest_repos(conn)
-    print(json.dumps(refresh(conn, names, get_token()), ensure_ascii=False, indent=2))
+    token = get_token()
+    print(json.dumps({"meta": refresh(conn, names, token),
+                      "releases": refresh_releases(conn, names, token)},
+                     ensure_ascii=False, indent=2))
     conn.close()
 
 

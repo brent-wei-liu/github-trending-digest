@@ -69,3 +69,42 @@ def test_stale_rows_are_refetched():
     old = (datetime.now(timezone.utc) - timedelta(days=m.META_TTL_DAYS + 1)).isoformat()
     c.execute("UPDATE repo_meta SET fetched_at = ?", (old,))
     assert m.stale_repos(c, ["solo/a"]) == ["solo/a"]
+
+
+class ReleaseAPI:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, path, token=None):
+        self.calls.append(path)
+        if path == "/repos/r/rel/releases?per_page=1":
+            return [{"tag_name": "v2.0", "name": "Big one", "published_at": "2026-11-03T10:00:00Z"}]
+        if path.endswith("/releases?per_page=1"):
+            return []
+        if path == "/repos/t/tag/tags?per_page=1":
+            return [{"name": "v0.3", "commit": {"sha": "abc"}}]
+        if path == "/repos/t/tag/commits/abc":
+            return {"commit": {"committer": {"date": "2026-11-01T00:00:00Z"}}}
+        if path.endswith("/tags?per_page=1"):
+            return []
+        raise urllib.error.HTTPError(path, 404, "Not Found", {}, None)
+
+
+def test_latest_release_prefers_release_then_tag():
+    api = ReleaseAPI()
+    assert m.latest_release("r/rel", getter=api) == {
+        "kind": "release", "tag": "v2.0", "title": "Big one", "published_at": "2026-11-03T10:00:00Z"}
+    assert m.latest_release("t/tag", getter=api) == {
+        "kind": "tag", "tag": "v0.3", "title": None, "published_at": "2026-11-01T00:00:00Z"}
+    assert m.latest_release("n/none", getter=api) is None
+
+
+def test_refresh_releases_caches_including_none():
+    c, api = sqlite3.connect(":memory:"), ReleaseAPI()
+    res = m.refresh_releases(c, ["r/rel", "t/tag", "n/none"], getter=api)
+    assert res == {"checked": 3, "fetched": 3, "cached": 0, "failed": []}
+    rows = dict(c.execute("SELECT full_name, tag FROM repo_release"))
+    assert rows == {"r/rel": "v2.0", "t/tag": "v0.3", "n/none": None}
+    api.calls.clear()
+    assert m.refresh_releases(c, ["r/rel", "n/none"], getter=api)["cached"] == 2
+    assert api.calls == []

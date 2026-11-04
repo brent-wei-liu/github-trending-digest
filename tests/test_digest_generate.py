@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import digest_generate as g
 from db import init_db
-from repo_meta import ensure_table
+from repo_meta import ensure_release_table, ensure_table
 
 TODAY = "2026-11-04T19:35:00+00:00"
 D1 = "2026-11-03T19:35:00+00:00"
@@ -99,7 +99,13 @@ def _db():
     conn.row_factory = sqlite3.Row
     init_db(conn)
     ensure_table(conn)
+    ensure_release_table(conn)
     return conn
+
+
+def _release(conn, repo, kind, tag, title, published):
+    conn.execute("INSERT INTO repo_release (full_name, kind, tag, title, published_at, fetched_at) VALUES (?,?,?,?,?,?)",
+                 (repo, kind, tag, title, published, TODAY))
 
 
 def _entry(conn, repo, period, rank, stars, delta, at, created="2026-01-01T00:00:00Z",
@@ -127,6 +133,7 @@ def conn():
     _entry(c, "a/mem", "daily", 1, 110500, 1100, D1)
     _entry(c, "v/studio", "monthly", 3, 99895, 47000, D1)
     _entry(c, "w/liar", "weekly", 3, 100000, 1000, WEEK_AGO)
+    _entry(c, "y/young", "weekly", 6, 9000, 5000, D1, created="2026-09-01T00:00:00Z", lic=None)
     # today: daily list ranks don't follow gains
     _entry(c, "a/mem", "daily", 1, 111693, 1138, TODAY, kind="user")
     _entry(c, "b/new", "daily", 2, 12325, 3792, TODAY, created="2026-10-20T00:00:00Z", kind="big_tech")
@@ -134,10 +141,14 @@ def conn():
     _entry(c, "z/zero", "daily", 4, 0, 9000, TODAY)
     _entry(c, "a/mem", "weekly", 2, 111693, 7255, TODAY)
     _entry(c, "w/liar", "weekly", 1, 105000, 80000, TODAY)
-    _entry(c, "y/young", "weekly", 4, 30000, 14000, TODAY, created="2026-09-01T00:00:00Z", lic=None)
+    _entry(c, "y/young", "weekly", 4, 15000, 14000, TODAY, created="2026-09-01T00:00:00Z", lic=None)
+    _entry(c, "f/first", "weekly", 5, 8000, 700, TODAY, created="2026-10-10T00:00:00Z")
     _entry(c, "e/rea", "monthly", 1, 426438, 422104, TODAY, created="2026-04-14T00:00:00Z")
     _entry(c, "v/studio", "monthly", 2, 100551, 47605, TODAY)
     _entry(c, "s/small", "monthly", 4, 3878, 3213, TODAY, created=None, lang=None)
+    _entry(c, "o/oldsmall", "monthly", 5, 5000, 3000, TODAY, created="2024-01-01T00:00:00Z")
+    _release(c, "b/new", "release", "v1.0", "First stable", "2026-11-02T08:00:00Z")
+    _release(c, "c/old", "release", "v9.0", None, "2026-10-01T08:00:00Z")    # too old
     c.commit()
     return c
 
@@ -145,8 +156,8 @@ def conn():
 def test_payload_uses_only_todays_snapshot(conn):
     p = g.build_payload(conn)
     assert p["meta"]["date"] == "2026-11-04"
-    assert p["meta"]["total_repos"] == 9
-    assert p["meta"]["per_period"] == {"daily": 4, "weekly": 3, "monthly": 3}
+    assert p["meta"]["total_repos"] == 11
+    assert p["meta"]["per_period"] == {"daily": 4, "weekly": 4, "monthly": 4}
 
 
 def test_gainers_ranked_by_daily_gain_not_rank(conn):
@@ -154,15 +165,61 @@ def test_gainers_ranked_by_daily_gain_not_rank(conn):
     # z/zero has an impossible total → never ranked.
     assert p["gainers"] == ["b/new", "c/old", "a/mem"]
     assert p["meta"]["impossible"] == ["z/zero"]
-    assert "z/zero" in p["others"]
+    assert "z/zero" in p["omitted"] and "z/zero" not in p["others"]
 
 
-def test_rising_is_young_or_small_and_not_in_gainers(conn):
+def test_rising_requires_young_and_small_and_prefers_first_listing(conn):
     p = g.build_payload(conn)
-    # y/young (+2,000/day from weekly), s/small (<20k stars, +107/day from monthly);
-    # e/rea, v/studio, w/liar are old and big.
-    assert p["rising"] == ["y/young", "s/small"]
-    assert set(p["others"]) == {"z/zero", "w/liar", "e/rea", "v/studio"}
+    # f/first (首次上榜, +100/day) beats y/young (+2,000/day, listed yesterday).
+    # Excluded: b/new (in 涨星榜), o/oldsmall (small but old), s/small (age unknown),
+    # e/rea / v/studio / w/liar (old and big).
+    assert p["rising"] == ["f/first", "y/young"]
+    # 其他在榜 ordered by per-day gain.
+    assert p["others"] == ["e/rea", "w/liar", "v/studio", "s/small", "o/oldsmall"]
+
+
+def test_others_capped(conn, monkeypatch):
+    monkeypatch.setattr(g, "OTHERS_MAX", 2)
+    p = g.build_payload(conn)
+    assert p["others"] == ["e/rea", "w/liar"]
+    assert set(p["omitted"]) == {"v/studio", "s/small", "o/oldsmall", "z/zero"}
+    assert p["meta"]["shown_repos"] == 3 + 2 + 2
+    # Omitted repos don't feed the hook, and the prompt doesn't list them.
+    assert not any("v/studio" in f for f in p["hook_facts"])
+    assert "v/studio" not in p["prompts"]["draft"]
+    assert "其他在榜只列日均增量前 2（今日共 11 个在榜）" in p["footnote"]
+
+
+def test_release_evidence_window():
+    d = date(2026, 11, 4)
+    assert g.release_evidence(("release", "v1.0", "First", "2026-11-02T08:00:00Z"), d)["days_ago"] == 2
+    assert g.release_evidence(("tag", "v2", None, "2026-10-27T00:00:00Z"), d) is None   # 8 days
+    assert g.release_evidence((None, None, None, None), d) is None
+    assert g.release_evidence(None, d) is None
+
+
+def test_evidence_lines():
+    rel = {"kind": "release", "tag": "v1.0", "title": "First stable", "date": "2026-11-02", "days_ago": 2}
+    assert g.evidence_lines(rel, True, 1) == ["2026-11-02（2 天前）发布 v1.0 「First stable」", "首次上榜"]
+    tag = {"kind": "tag", "tag": "v3", "title": None, "date": "2026-11-04", "days_ago": 0}
+    assert g.evidence_lines(tag, False, 4) == ["2026-11-04（今天）打标签 v3", "连续 4 天在榜"]
+    assert g.evidence_lines(None, False, 1) == []
+
+
+def test_payload_evidence(conn):
+    by = {r["repo"]: r for r in g.build_payload(conn)["repos"]}
+    assert by["b/new"]["evidence"] == ["2026-11-02（2 天前）发布 v1.0 「First stable」", "首次上榜"]
+    assert by["c/old"]["release"] is None and by["c/old"]["evidence"] == ["首次上榜"]
+    assert by["a/mem"]["evidence"] == ["连续 3 天在榜"]
+
+
+def test_why_restates_numbers():
+    for bad in ("涨速较昨日回落，但仍是今天涨星最多的项目", "日增 +3,792，热度持续",
+                "总星突破 10 万", "一周涨了 9,770 星", "周增 +9,770"):
+        assert g.why_restates_numbers(bad), bad
+    for ok in ("11 月 2 日发布 v1.0，加入 Windows 支持", "首次上榜", "连续 4 天在榜",
+               "LocalStack 社区版改为收费后被推荐为免费替代"):
+        assert not g.why_restates_numbers(ok), ok
 
 
 def test_item_lines(conn):
@@ -174,10 +231,10 @@ def test_item_lines(conn):
     assert b["tag_suffix"].startswith("「大厂官方」")
     assert b["stats_line"] == "日增 +3,792（昨日未上日榜） · 总星 ⭐12,325 · 上线 15 天 · 在榜 1 天 · 首次上榜"
     y = by["y/young"]["item_lines"]
-    assert y["stats_line"].startswith("周增 +14,000（约 +2,000/天） · 总星 ⭐30,000 · 上线 64 天")
+    assert y["stats_line"].startswith("周增 +14,000（约 +2,000/天） · 总星 ⭐15,000 · 上线 64 天")
     assert y["tag_suffix"] == "「个人开发者」 · Python · 未声明许可"
     # No cached API metadata: tags and age are simply omitted.
-    s = by["s/small"]["item_lines"]
+    s = g._item_lines(by["s/small"])
     assert s["tag_suffix"] == "—" and "上线" not in s["stats_line"]
 
 
@@ -209,10 +266,14 @@ def test_prompts_carry_verbatim_lines(conn):
     d = p["prompts"]["draft"]
     assert "数据行：日增 +3,792（昨日未上日榜） · 总星 ⭐12,325" in d
     assert "## 涨星榜 Top 10" in d and "## 新锐榜 Top 2" in d and "## 今天这三件事" in d
+    assert "证据候选（GitHub API/本地历史）：2026-11-02（2 天前）发布 v1.0 「First stable」；首次上榜" in d
+    assert "涨速较昨日回落，但仍是今天涨星最多的项目" in d          # bad example present
+    assert "不得出现日增/周增/月增/总星/涨速" in p["prompts"]["refine_template"]
+    assert "把星数/涨速当原因复述" in p["prompts"]["critique_template"]
     assert "⚠️ 数据待核：周增 +80,000 与本地快照不符" in d
     assert "{draft}" in p["prompts"]["critique_template"]
     assert "{critique}" in p["prompts"]["refine_template"]
-    assert "z/zero、w/liar" in p["prompts"]["refine_template"]
+    assert "数据待核项目：w/liar。" in p["prompts"]["refine_template"]   # z/zero is omitted
 
 
 def test_empty_db_payload():
@@ -234,7 +295,7 @@ def _digest(p, themes=3, swap=False):
             out += [f"### {i}. [{n}]({r['url']}) · 白话标题", f"「AI 编程」{il['tag_suffix']}", il["stats_line"]]
             if "anomaly_line" in il:
                 out.append(il["anomaly_line"])
-            out += ["**是什么**：一句话。", "**为什么涨**：今日日增 +1。", ""]
+            out += ["**是什么**：一句话。", "**为什么涨**：首次上榜。", ""]
     out += [g.OTHERS_HEADING]
     for n in p["others"]:
         r = by[n]
@@ -249,7 +310,22 @@ def test_check_accepts_valid_digest(conn):
     p = g.build_payload(conn)
     report = g.check_digest(_digest(p), p)
     assert report["ok"], report["problems"]
-    assert report["repos_found"] == report["repos_expected"] == 9
+    assert report["repos_found"] == report["repos_expected"] == 10
+
+
+def test_check_rejects_numbers_as_reason_and_omitted_repo(conn):
+    p = g.build_payload(conn)
+    text = _digest(p).replace("**为什么涨**：首次上榜。", "**为什么涨**：涨速回落但日增 +1,138 仍居第一。", 1)
+    text += "\n- [z/zero](https://github.com/z/zero)"
+    probs = g.check_digest(text, p)["problems"]
+    assert any(x.startswith("b/new: 为什么涨 restates star numbers") for x in probs)
+    assert "omitted repo should not appear: z/zero" in probs
+
+
+def test_check_allows_missing_why_line(conn):
+    p = g.build_payload(conn)
+    text = _digest(p).replace("**为什么涨**：首次上榜。\n", "")
+    assert g.check_digest(text, p)["ok"]
 
 
 def test_check_rejects_reordered_ranking_and_wrong_theme_count(conn):

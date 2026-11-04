@@ -36,7 +36,7 @@ Scrape GitHub Trending across daily / weekly / monthly periods, store in SQLite,
 ```
 github-trending-digest/
 ├── github_fetch.py        # scrape https://github.com/trending HTML
-├── repo_meta.py           # GitHub API metadata (created_at, license, owner type), cached in repo_meta table
+├── repo_meta.py           # GitHub API metadata (created_at, license, owner type) + latest release/tag, cached in repo_meta / repo_release
 ├── digest_generate.py     # today's payload (涨星榜/新锐榜 order, stats lines, ⚠️ 数据待核 flags) + 3-step prompts; `check` validates a digest
 ├── db.py                  # SQLite schema + migrations
 ├── api.py                 # FastAPI server (port 8082)

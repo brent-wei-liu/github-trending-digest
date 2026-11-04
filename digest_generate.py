@@ -6,9 +6,10 @@ Outputs JSON to stdout. The Claude Code `github-trending-digest` skill
 orchestrates Draft → Critique → Refine via the Agent (Task) tool.
 
 Everything deterministic happens here, not in the LLM: today's snapshot, the
-membership and order of 涨星榜 / 新锐榜, milestone candidates, per-item stats
-lines (thousands separators, 上线/在榜 days, yesterday's gain), owner/license
-tags (from repo_meta.py's cached GitHub API data) and 「⚠️ 数据待核」 flags.
+membership and order of 涨星榜 / 新锐榜 / 其他在榜, milestone candidates, per-item
+stats lines (thousands separators, 上线/在榜 days, yesterday's gain), owner/license
+tags, 「为什么涨」 evidence candidates (latest release/tag within 7 days, from
+repo_meta.py's cached GitHub API data) and 「⚠️ 数据待核」 flags.
 
 Usage:
   python3 digest_generate.py query [--date YYYY-MM-DD] [--focus default]
@@ -23,7 +24,7 @@ import sys
 from datetime import date as date_cls, datetime, timedelta, timezone
 
 from db import get_db, init_db
-from repo_meta import LICENSE_NONE, OWNER_KIND_LABEL, ensure_table
+from repo_meta import LICENSE_NONE, OWNER_KIND_LABEL, ensure_release_table, ensure_table
 
 PERIODS = ("daily", "weekly", "monthly")
 LABELS = {"daily": ("日榜", "日增"), "weekly": ("周榜", "周增"), "monthly": ("月榜", "月增")}
@@ -31,8 +32,10 @@ PERIOD_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
 
 TOP_N = 10
 # 新锐榜: young or small projects, ranked by average gain per day.
-YOUNG_DAYS = 180
-SMALL_STARS = 20_000
+YOUNG_DAYS = 90           # 新锐榜: created ≤ 90 days AND
+SMALL_STARS = 20_000      # total stars < 20,000
+OTHERS_MAX = 6            # 其他在榜: at most 6 items, by per-day gain
+RELEASE_WINDOW_DAYS = 7   # release/tag newer than this is an evidence candidate
 MILESTONE_LOOKBACK_DAYS = 3   # 「今日突破」 only against a recent snapshot
 MILESTONES = (1_000, 5_000, 10_000, 20_000, 50_000, 100_000, 200_000, 300_000,
               500_000, 1_000_000)
@@ -51,6 +54,14 @@ GAINERS_HEADING = "## 涨星榜 Top 10"
 RISING_HEADING = "## 新锐榜"
 OTHERS_HEADING = "## 其他在榜"
 THEMES_HEADING = "## 今天这三件事"
+
+
+# A 「为什么涨」 line may not restate star numbers as if they were a reason.
+_WHY_NUMBERS_RE = re.compile(r"[日周月]增|总星|⭐|涨速|涨星|星标|[+＋]\s?\d|\d[\d,]*\s*(颗)?星")
+
+
+def why_restates_numbers(text):
+    return bool(_WHY_NUMBERS_RE.search(text))
 
 
 def fmt_num(n):
@@ -203,13 +214,14 @@ def _focus_rules(conn, focus):
 
 def build_payload(conn, on_date=None, focus="default"):
     ensure_table(conn)
+    ensure_release_table(conn)
     snap_date, snaps = latest_snapshot(conn, on_date)
     rules = _focus_rules(conn, focus)
     payload = {
         "meta": {"date": snap_date.isoformat() if snap_date else None, "focus": focus,
                  "focus_instructions": rules.get("instructions", ""),
                  "snapshots": snaps, "total_repos": 0},
-        "repos": [], "gainers": [], "rising": [], "others": [],
+        "repos": [], "gainers": [], "rising": [], "others": [], "omitted": [],
     }
     if not snaps:
         return payload
@@ -219,6 +231,8 @@ def build_payload(conn, on_date=None, focus="default"):
         "SELECT full_name, language, description FROM repos")}
     meta = {r[0]: r[1:] for r in conn.execute(
         "SELECT full_name, created_at, license, owner_kind FROM repo_meta")}
+    releases = {r[0]: r[1:] for r in conn.execute(
+        "SELECT full_name, kind, tag, title, published_at FROM repo_release")}
 
     order, by_repo = [], {}
     for p in PERIODS:
@@ -285,6 +299,7 @@ def build_payload(conn, on_date=None, focus="default"):
         age = (snap_date - _d(created)).days if created else None
         streak = list_streak(dates, scrape_dates, snap_date)
         first_ever = not any(d < snap_date for d in dates)
+        release = release_evidence(releases.get(repo), snap_date)
         repos.append({
             "repo": repo,
             "url": url,
@@ -303,6 +318,8 @@ def build_payload(conn, on_date=None, focus="default"):
             "owner_kind": OWNER_KIND_LABEL.get(kind) if kind else None,
             "streak_days": streak,
             "first_ever": first_ever,
+            "release": release,
+            "evidence": evidence_lines(release, first_ever, streak),
             "milestone": None if reasons else milestone_for(stars, prev_total[0] if prev_total else None),
             "anomaly": bool(reasons),
             "anomaly_reason": "；".join(reasons),
@@ -317,18 +334,22 @@ def build_payload(conn, on_date=None, focus="default"):
                      key=lambda r: (-r["daily_delta"], r["repo"]))[:TOP_N]
     g_names = {r["repo"] for r in gainers}
 
-    def young(r):
-        return (r["age_days"] is not None and r["age_days"] <= YOUNG_DAYS) or r["stars"] < SMALL_STARS
+    def young(r):  # both conditions; unknown age never qualifies
+        return r["age_days"] is not None and r["age_days"] <= YOUNG_DAYS and r["stars"] < SMALL_STARS
 
     rising = sorted((r for r in rankable if r["repo"] not in g_names and young(r)),
-                    key=lambda r: (-r["per_day_gain"], r["repo"]))[:TOP_N]
+                    key=lambda r: (not r["first_ever"], -r["per_day_gain"], r["repo"]))[:TOP_N]
     featured = g_names | {r["repo"] for r in rising}
     for r in gainers + rising:
         r["item_lines"] = _item_lines(r)
-    others = [r for r in repos if r["repo"] not in featured]
+    rest = sorted((r for r in rankable if r["repo"] not in featured),
+                  key=lambda r: (-r["per_day_gain"], r["repo"]))
+    others, omitted = rest[:OTHERS_MAX], rest[OTHERS_MAX:]
+    omitted += [r for r in repos if r["impossible"]]
+    shown = featured | {r["repo"] for r in others}
 
     milestones = [f"{r['repo']} {r['milestone']}（⭐{fmt_num(r['stars'])}）"
-                  for r in repos if r["milestone"]]
+                  for r in repos if r["milestone"] and r["repo"] in shown]
     top = gainers[0] if gainers else None
     hook_facts = milestones[:]
     if top:
@@ -339,15 +360,17 @@ def build_payload(conn, on_date=None, focus="default"):
     ts = max(snaps.values())
     scraped = f"{ts[:10]} {ts[11:16]} UTC"
     footnote = (
-        f"口径：涨星榜按今日日增排序；新锐榜为上线 ≤{YOUNG_DAYS} 天或总星 <{fmt_num(SMALL_STARS)} 的其余项目，"
-        "按日均增量（日增，或周增÷7、月增÷30）排序；日/周/月增来自三个独立榜单，不能相减。"
-        f"「{ANOMALY_MARK}」是与本地历史快照比对后的提示，不代表刷星。"
+        f"口径：涨星榜按今日日增排序；新锐榜限上线 ≤{YOUNG_DAYS} 天且总星 <{fmt_num(SMALL_STARS)}（不含涨星榜），"
+        f"首次上榜优先、再按日均增量排序，不凑数；其他在榜只列日均增量前 {OTHERS_MAX}（今日共 {len(repos)} 个在榜）。"
+        f"日/周/月增来自三个独立榜单；「{ANOMALY_MARK}」为与本地快照比对的提示，不代表刷星。"
         f"数据：GitHub Trending（{scraped}）+ GitHub API。"
     )
 
     counts = {p: sum(1 for r in repos if p in r["lists"]) for p in PERIODS}
     payload["meta"].update({
         "total_repos": len(repos),
+        "shown_repos": len(shown),
+        "omitted_count": len(omitted),
         "per_period": counts,
         "gainers_count": len(gainers),
         "rising_count": len(rising),
@@ -362,12 +385,41 @@ def build_payload(conn, on_date=None, focus="default"):
         "gainers": [r["repo"] for r in gainers],
         "rising": [r["repo"] for r in rising],
         "others": [r["repo"] for r in others],
+        "omitted": [r["repo"] for r in omitted],
         "milestones": milestones,
         "hook_facts": hook_facts,
         "footnote": footnote,
     })
     payload["prompts"] = render_prompts(payload)
     return payload
+
+
+def release_evidence(row, snap_date):
+    """Latest release/tag if published within RELEASE_WINDOW_DAYS of snap_date, else None."""
+    if not row:
+        return None
+    kind, tag, title, published = row
+    if not (kind and tag and published):
+        return None
+    days = (snap_date - _d(published)).days
+    if days < 0 or days > RELEASE_WINDOW_DAYS:
+        return None
+    return {"kind": kind, "tag": tag, "title": title, "date": published[:10], "days_ago": days}
+
+
+def evidence_lines(release, first_ever, streak):
+    """Facts the LLM may cite in 「为什么涨」 without a web call."""
+    out = []
+    if release:
+        what = "发布" if release["kind"] == "release" else "打标签"
+        name = f" 「{release['title']}」" if release["title"] and release["title"] != release["tag"] else ""
+        when = "今天" if release["days_ago"] == 0 else f"{release['days_ago']} 天前"
+        out.append(f"{release['date']}（{when}）{what} {release['tag']}{name}")
+    if first_ever:
+        out.append("首次上榜")
+    elif streak >= 2:
+        out.append(f"连续 {streak} 天在榜")
+    return out
 
 
 def _item_lines(r):
@@ -413,7 +465,8 @@ def _ranked_block(label, i, r):
     if "anomaly_line" in il:
         lines.append(f"  待核行：{il['anomaly_line']}")
     lines += [f"  官方描述：{r['description'] or '（官方描述为空）'}",
-              f"  榜单原始数据：{_ranks(r)}"]
+              f"  榜单原始数据：{_ranks(r)}",
+              f"  证据候选（GitHub API/本地历史）：{'；'.join(r['evidence']) or '无'}"]
     return "\n".join(lines)
 
 
@@ -431,7 +484,7 @@ def render_prompts(payload):
     ri = [by[n] for n in payload["rising"]]
     ot = [by[n] for n in payload["others"]]
     focus_line = f"Focus 说明：{m['focus_instructions']}\n" if m["focus_instructions"] else ""
-    anomalies = "、".join(m["anomalies"]) or "无"
+    anomalies = "、".join(r["repo"] for r in g + ri + ot if r["anomaly"]) or "无"
     hook = "\n".join(f"- {f}" for f in payload["hook_facts"]) or "- 无"
     rising_heading = f"{RISING_HEADING} Top {len(ri)}"
 
@@ -441,7 +494,7 @@ def render_prompts(payload):
 {focus_line}
 ## 数据（脚本已定好榜单成员和顺序，不得增删或调换）
 
-共 {m['total_repos']} 个不重复项目：涨星榜 {len(g)} 个、新锐榜 {len(ri)} 个、其他在榜 {len(ot)} 个。
+本期写 {m['shown_repos']} 个项目：涨星榜 {len(g)} 个、新锐榜 {len(ri)} 个、其他在榜 {len(ot)} 个（其余 {m['omitted_count']} 个在榜项目已由脚本略去，不要提及）。
 「行首」「标签行」「数据行」「待核行」「行前缀」里除尖括号占位符外的内容都必须逐字复制（数字已带千分位）。
 
 ### 今日看点候选事实
@@ -450,7 +503,7 @@ def render_prompts(payload):
 ### 涨星榜（按今日日增排序）
 {chr(10).join(_ranked_block('涨星榜', i, r) for i, r in enumerate(g, 1))}
 
-### 新锐榜（上线 ≤{YOUNG_DAYS} 天或总星 <{fmt_num(SMALL_STARS)}，按日均增量排序）
+### 新锐榜（上线 ≤{YOUNG_DAYS} 天且总星 <{fmt_num(SMALL_STARS)}，首次上榜优先，再按日均增量排序）
 {chr(10).join(_ranked_block('新锐榜', i, r) for i, r in enumerate(ri, 1)) or '（无）'}
 
 ### 其他在榜
@@ -471,13 +524,13 @@ def render_prompts(payload):
 <数据行>
 <待核行，仅被标记的项目才有>
 **是什么**：<1–2 句>
-**为什么涨**：<1–2 句>
+**为什么涨**：<1 句，有证据才写原因；没有就写简短事实或整行省略，见规则 5>
 
 （空一行，下一个项目……）
 
 {rising_heading}
 
-（同上格式，编号从 1 开始）
+{'（同上格式，编号从 1 开始）' if ri else '今日没有符合条件的新项目。'}
 
 {OTHERS_HEADING}
 - <行前缀> · <备注>
@@ -496,14 +549,19 @@ def render_prompts(payload):
 2. 白话标题：不超过 20 个汉字，不用术语和英文缩写，说清「给谁解决什么」，例如「不用 U 盘，在 Windows 旁边装 Linux」「让 AI 帮你把网页设计做得不千篇一律」。
 3. 分类：一个短词，如 AI 编程、Agent 技能、开发工具、多媒体、安全、效率工具、学习资料、金融。主体类型、语言、许可已在标签行里给出，照抄。
 4. 是什么：1–2 句，具体说它做什么、怎么用，以官方描述为准，README 细节只作补充。不要复述功能清单。
-5. 为什么涨：1–2 句，必须引用数据行或榜单原始数据里的具体数字（如「今日日增 +3,792，昨日 +2,243」「上线 45 天」「连续在榜 3 天」「周增 +9,770」）。原因只写有依据的（README、发布记录、你查到的新闻/讨论）；查不到原因就只陈述数据事实，不要猜测、不要编造事件。禁用「爆火」「疯狂」「炸裂」「神器」等夸张词。
+5. 为什么涨（最重要的规则）：只有找到具体证据时才写原因。算作证据的只有：新版本/标签发布（先看「证据候选」，近 7 天的 release/tag 已列出，无需联网查）、官方公告、博客/HN/新闻报道、相关的重要事件、竞品改许可或涨价。写原因时点明证据，如「11 月 2 日发布 v2.0，新增离线模式」「HN 首页讨论：……」。
+   - 找不到证据：只写一句简短事实，如「首次上榜」「连续 5 天在榜」，或者整行省略 `**为什么涨**`。
+   - 禁止把星数当原因复述：这一行不得出现日增/周增/月增/总星/涨速/「+数字」——数据行里已经有了。禁止套话。
+   - 反例（不要这样写）：「涨速较昨日回落，但仍是今天涨星最多的项目」「日增 +3,792，热度持续」「上线仅 45 天就收获大量关注」「AI 编程赛道持续火热，带动关注」（无证据的泛泛推测）。
+   - 正例：「11 月 3 日发布 v1.4，加入 Windows 支持」「LocalStack 社区版 10 月起收费后，作为免费替代被频繁推荐」（有出处时）「首次上榜」「连续 4 天在榜」。
+   - 禁用「爆火」「疯狂」「炸裂」「神器」等夸张词。
 6. 其他在榜：每个项目一行 `- <行前缀> · <备注>`，备注不超过 20 个汉字、用白话。
 7. 数据待核：被标记项目照抄「待核行」或指定备注，不加评论；不要断言刷星，也不要对未标记项目做任何刷星、异常的暗示。被标记项目照常留在榜单里。
 8. 今天这三件事：正好 3 条，每条一个短标题 + 一句话，括号里列出相关项目名（不加链接），写模式和洞察，不复述数字。
-9. 每个项目只以链接形式出现一次；全部 {m['total_repos']} 个项目都必须出现，不得新增数据之外的项目。
+9. 每个项目只以链接形式出现一次；上面列出的 {m['shown_repos']} 个项目都必须出现，不得新增或补回其他项目。
 10. 反杜撰：只写数据或你实际查到的事实，不编造数字、基准、客户、合规清单；查不到就不写，也不要写「数据未提供」。最高级（最、第一）只在数据能直接核对时使用。
 11. 金融/交易类项目注明「不构成投资建议」；安全/逆向类项目保持中性。
-12. 全文（含链接 Markdown）控制在 9,000 字符以内。"""
+12. 全文（含链接 Markdown）控制在 7,000 字符以内。"""
 
     critique = f"""你是一位资深开源社区观察者，也是挑剔的科技编辑。请审阅以下「GitHub 飙升日报」初稿。
 
@@ -520,7 +578,10 @@ def render_prompts(payload):
 
 1. 白话标题：普通技术爱好者能否一眼看懂？有没有术语、夸张或不准确？
 2. 「是什么」是否准确具体（可用网络核实项目真实用途）？
-3. 「为什么涨」是否引用了具体数字、原因是否有依据？有没有猜测或编造的事件、夸张措辞？
+3. 「为什么涨」逐条检查（最重要）：每条原因是否有具体证据（版本发布、官方公告、博客/HN/新闻、相关事件、竞品改许可/涨价）？可联网核实。以下都算不合格，请逐条点名并给出改法：
+   - 把星数/涨速当原因复述（如「涨速回落但仍第一」「日增 +3,792，热度持续」）；
+   - 无证据的推测或泛泛套话（如「AI 赛道火热带动关注」）。
+   改法只有三种：换成你查到的有出处的原因（写明出处）；改成简短事实（「首次上榜」「连续 N 天在榜」）；或建议整行删除。
 4. 分类标签是否合理？其他在榜的一行备注是否准确、不超过 20 字？
 5. 今日看点是否抓人且属实？「今天这三件事」是否有洞察、正好 3 条？
 6. 整体是否简洁，有没有套话和重复？
@@ -539,12 +600,13 @@ def render_prompts(payload):
 
 ## 范围约束（编辑部掌握原始数据，审稿人看不到，以下为最终裁定）
 
-1. 共 {m['total_repos']} 个项目，必须全部保留并带链接；涨星榜 {len(g)} 个、新锐榜 {len(ri)} 个的成员与顺序不得改变；不得新增项目。
+1. 共 {m['shown_repos']} 个项目，必须全部保留并带链接；涨星榜 {len(g)} 个、新锐榜 {len(ri)} 个的成员与顺序不得改变；不得新增项目。
 2. 行首链接、标签行里的主体类型/语言/许可、数据行、待核行、其他在榜的行前缀、末尾口径脚注一字不改。
 3. 数据待核项目：{anomalies}。保留待核行原样，不断言刷星，项目留在原位置。
-4. 审稿意见与数据冲突时以数据为准；初稿写了官方描述、README 或可查来源都没有的具体事实（尤其是「为什么涨」里的原因）时，按审稿意见删改为只陈述数据事实。
-5. 保持格式：白话标题 ≤20 字；是什么、为什么涨各 1–2 句；其他在榜每项一行、备注 ≤20 字；今天这三件事正好 3 条。
-6. 终稿直接输出，不要包含修改说明。"""
+4. 审稿意见与数据冲突时以数据为准；初稿写了官方描述、README 或可查来源都没有的具体事实时，按审稿意见删改。
+5. 「为什么涨」只保留有证据的原因（版本发布、公告、博客/HN/新闻、相关事件、竞品改许可/涨价）；没有证据的改成简短事实（「首次上榜」「连续 N 天在榜」）或删掉整行。这一行不得出现日增/周增/月增/总星/涨速/「+数字」，不写「涨速回落但仍第一」之类套话。
+6. 保持格式：白话标题 ≤20 字；是什么 1–2 句、为什么涨 1 句（可省略）；其他在榜每项一行、备注 ≤20 字；今天这三件事正好 3 条。
+7. 终稿直接输出，不要包含修改说明。"""
 
     return {"draft": draft, "critique_template": critique, "refine_template": refine}
 
@@ -597,9 +659,13 @@ def check_digest(text, payload):
             for key in ("tag_suffix", "stats_line", "anomaly_line"):
                 if key in il and il[key] not in body:
                     problems.append(f"{name}: {key} missing or edited (want '{il[key]}')")
-            for label in ("**是什么**", "**为什么涨**"):
-                if label not in body:
-                    problems.append(f"{name}: {label} missing")
+            if "**是什么**" not in body:
+                problems.append(f"{name}: **是什么** missing")
+            for ln in blk:
+                if ln.strip().startswith("**为什么涨**"):
+                    why = ln.split("**为什么涨**", 1)[1].lstrip("：: ")
+                    if why_restates_numbers(why):
+                        problems.append(f"{name}: 为什么涨 restates star numbers: {why}")
             title = blk[0].split(")", 1)[1].lstrip(" ·") if ")" in blk[0] else ""
             if len(title) > 22:
                 warnings.append(f"title over 20 chars for {name}: {title}")
@@ -619,7 +685,8 @@ def check_digest(text, payload):
             warnings.append(f"note over 20 chars for {name}: {note}")
 
     linked = [m.group(2) for m in _LINK_RE.finditer(text)]
-    for name in repos:
+    shown = payload["gainers"] + payload["rising"] + payload["others"]
+    for name in shown:
         n = linked.count(name)
         if n == 0:
             problems.append(f"missing repo: {name}")
@@ -628,6 +695,8 @@ def check_digest(text, payload):
     for name in dict.fromkeys(linked):
         if name not in repos:
             problems.append(f"repo not in today's data: {name}")
+        elif name not in shown:
+            problems.append(f"omitted repo should not appear: {name}")
     for name in repos:
         if not repos[name]["anomaly"] and any(
                 ANOMALY_MARK in ln and f"[{name}]" in ln for ln in lines):
@@ -645,8 +714,8 @@ def check_digest(text, payload):
         "problems": problems,
         "warnings": warnings,
         "chars": len(text),
-        "repos_expected": len(repos),
-        "repos_found": sum(1 for n in repos if n in linked),
+        "repos_expected": len(shown),
+        "repos_found": sum(1 for n in shown if n in linked),
     }
 
 
