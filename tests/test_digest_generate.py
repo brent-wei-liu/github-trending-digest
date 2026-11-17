@@ -85,11 +85,40 @@ def test_window_mismatch():
     assert g.window_anomaly("weekly", 105000, 4500, 0, base) is None
 
 
-def test_list_streak_skips_days_without_any_scrape():
-    s = {date(2026, 11, d) for d in (1, 2, 4)}   # no scrape on 11-03
-    assert g.list_streak({date(2026, 11, 2), date(2026, 11, 4)}, s, date(2026, 11, 4)) == 2
-    assert g.list_streak({date(2026, 11, 4)}, s, date(2026, 11, 4)) == 1
-    assert g.list_streak({date(2026, 11, 1), date(2026, 11, 4)}, s, date(2026, 11, 4)) == 1
+def test_listed_days_counts_any_list_in_window():
+    today = date(2026, 11, 17)
+    days = {date(2026, 10, 1), date(2026, 10, 19), date(2026, 10, 31), date(2026, 11, 17)}
+    assert g.listed_days(days, today) == 3          # 10-01 is outside the 30-day window
+    assert g.listed_days({today}, today) == 1
+
+
+def _days(*md):
+    return {date(2026, m, d) for m, d in md}
+
+
+def test_list_status_superpowers_like_history():
+    # On the daily list 10-27..10-31, weekly until 11-07, nothing 11-08..11-16, daily again today.
+    today = date(2026, 11, 17)
+    daily = _days((3, 27), (10, 27), (10, 28), (10, 29), (10, 30), (10, 31), (11, 17))
+    any_ = daily | _days((11, 1), (11, 3), (11, 7))
+    status, last = g.list_status(any_, daily, True, date(2026, 11, 16), today)
+    assert (status, last) == ("back", date(2026, 10, 31))
+    assert g.status_label(status, last) == "重回日榜（上次 10-31）"
+
+
+def test_list_status_cases():
+    today, prev = date(2026, 11, 17), date(2026, 11, 16)
+    assert g.list_status({today}, {today}, True, prev, today) == ("first", None)
+    # Only weekly/monthly before → first time on the daily list, not 首次上榜.
+    assert g.list_status(_days((11, 1), (11, 17)), {today}, True, prev, today)[0] == "first_daily"
+    # On yesterday's daily list too → no label.
+    assert g.list_status(_days((11, 16), (11, 17)), _days((11, 16), (11, 17)), True, prev, today) == \
+        (None, date(2026, 11, 16))
+    # Previous scrape day was 11-09 (data gap 11-10): on the 11-09 daily list = not "back".
+    assert g.list_status(_days((11, 9), (11, 11)), _days((11, 9), (11, 11)), True,
+                         date(2026, 11, 9), date(2026, 11, 11))[0] is None
+    # Not on today's daily list (weekly only), with history → no label.
+    assert g.list_status(_days((11, 1), (11, 17)), _days((11, 1),), False, prev, today) == (None, None)
 
 
 # ---------- payload ----------
@@ -200,17 +229,18 @@ def test_release_evidence_window():
 
 def test_evidence_lines():
     rel = {"kind": "release", "tag": "v1.0", "title": "First stable", "date": "2026-11-02", "days_ago": 2}
-    assert g.evidence_lines(rel, True, 1) == ["2026-11-02（2 天前）发布 v1.0 「First stable」", "首次上榜"]
+    assert g.evidence_lines(rel, "首次上榜", 1) == ["2026-11-02（2 天前）发布 v1.0 「First stable」", "首次上榜"]
     tag = {"kind": "tag", "tag": "v3", "title": None, "date": "2026-11-04", "days_ago": 0}
-    assert g.evidence_lines(tag, False, 4) == ["2026-11-04（今天）打标签 v3", "连续 4 天在榜"]
-    assert g.evidence_lines(None, False, 1) == []
+    assert g.evidence_lines(tag, None, 4) == ["2026-11-04（今天）打标签 v3", "近 30 天上榜 4 天"]
+    assert g.evidence_lines(None, "重回日榜（上次 10-31）", 9) == ["重回日榜（上次 10-31）"]
+    assert g.evidence_lines(None, None, 1) == []
 
 
 def test_payload_evidence(conn):
     by = {r["repo"]: r for r in g.build_payload(conn)["repos"]}
     assert by["b/new"]["evidence"] == ["2026-11-02（2 天前）发布 v1.0 「First stable」", "首次上榜"]
     assert by["c/old"]["release"] is None and by["c/old"]["evidence"] == ["首次上榜"]
-    assert by["a/mem"]["evidence"] == ["连续 3 天在榜"]
+    assert by["a/mem"]["evidence"] == ["近 30 天上榜 3 天"]
 
 
 def test_why_restates_numbers():
@@ -226,10 +256,10 @@ def test_item_lines(conn):
     by = {r["repo"]: r for r in g.build_payload(conn)["repos"]}
     a = by["a/mem"]["item_lines"]
     assert a["tag_suffix"] == "「个人开发者」 · Python · MIT"
-    assert a["stats_line"] == "日增 +1,138（昨日 +1,100） · 总星 ⭐111,693 · 上线 307 天 · 在榜 3 天"
+    assert a["stats_line"] == "日增 +1,138（昨日 +1,100） · 总星 ⭐111,693 · 上线 307 天 · 近 30 天上榜 3 天"
     b = by["b/new"]["item_lines"]
     assert b["tag_suffix"].startswith("「大厂官方」")
-    assert b["stats_line"] == "日增 +3,792（昨日未上日榜） · 总星 ⭐12,325 · 上线 15 天 · 在榜 1 天 · 首次上榜"
+    assert b["stats_line"] == "日增 +3,792（昨日未上日榜） · 总星 ⭐12,325 · 上线 15 天 · 近 30 天上榜 1 天 · 首次上榜"
     y = by["y/young"]["item_lines"]
     assert y["stats_line"].startswith("周增 +14,000（约 +2,000/天） · 总星 ⭐15,000 · 上线 64 天")
     assert y["tag_suffix"] == "「个人开发者」 · Python · 未声明许可"
@@ -295,7 +325,8 @@ def _digest(p, themes=3, swap=False):
             out += [f"### {i}. [{n}]({r['url']}) · 白话标题", f"「AI 编程」{il['tag_suffix']}", il["stats_line"]]
             if "anomaly_line" in il:
                 out.append(il["anomaly_line"])
-            out += ["**是什么**：一句话。", "**为什么涨**：首次上榜。", ""]
+            why = r["evidence"][-1] if r["evidence"] else "短事实"
+            out += ["**是什么**：一句话。", f"**为什么涨**：{why}。", ""]
     out += [g.OTHERS_HEADING]
     for n in p["others"]:
         r = by[n]
@@ -316,6 +347,7 @@ def test_check_accepts_valid_digest(conn):
 def test_check_rejects_numbers_as_reason_and_omitted_repo(conn):
     p = g.build_payload(conn)
     text = _digest(p).replace("**为什么涨**：首次上榜。", "**为什么涨**：涨速回落但日增 +1,138 仍居第一。", 1)
+    assert "涨速回落" in text
     text += "\n- [z/zero](https://github.com/z/zero)"
     probs = g.check_digest(text, p)["problems"]
     assert any(x.startswith("b/new: 为什么涨 restates star numbers") for x in probs)
@@ -325,6 +357,7 @@ def test_check_rejects_numbers_as_reason_and_omitted_repo(conn):
 def test_check_allows_missing_why_line(conn):
     p = g.build_payload(conn)
     text = _digest(p).replace("**为什么涨**：首次上榜。\n", "")
+    assert "首次上榜。" not in text
     assert g.check_digest(text, p)["ok"]
 
 
@@ -353,3 +386,56 @@ def test_check_requires_anomaly_mark_and_hook(conn):
     probs = g.check_digest(text, p)["problems"]
     assert "anomaly not marked: w/liar" in probs
     assert "今日看点 line missing" in probs
+
+
+# ---------- regression: superpowers-like history ----------
+
+@pytest.fixture
+def sp_conn():
+    """obra/superpowers-like: daily 10-27..10-31, weekly to 11-07, data gap 11-10,
+    absent 11-08..11-16, back on the daily list on 11-17."""
+    c = _db()
+    T = "2026-11-17T19:35:00+00:00"
+    for d in ("10-27", "10-28", "10-29", "10-30", "10-31"):
+        _entry(c, "o/sp", "daily", 5, 300000, 600, f"2026-{d}T19:35:00+00:00", created="2025-10-09T00:00:00Z")
+    for d in ("10-29", "11-01", "11-03", "11-07"):
+        _entry(c, "o/sp", "weekly", 4, 310000, 4000, f"2026-{d}T19:35:00+00:00", created="2025-10-09T00:00:00Z")
+    for d in ("11-08", "11-09", "11-11", "11-16"):       # other repos keep the scrape days alive
+        _entry(c, "x/other", "monthly", 1, 50000, 9000, f"2026-{d}T19:35:00+00:00")
+    _entry(c, "o/sp", "daily", 10, 319193, 598, T, created="2025-10-09T00:00:00Z")
+    _entry(c, "n/new", "daily", 1, 5000, 2000, T, created="2026-10-01T00:00:00Z")
+    _entry(c, "x/other", "monthly", 1, 59000, 9000, T)
+    c.commit()
+    return c
+
+
+def test_superpowers_like_repo_is_not_first_listing(sp_conn):
+    p = g.build_payload(sp_conn)
+    by = {r["repo"]: r for r in p["repos"]}
+    sp = by["o/sp"]
+    assert not sp["first_ever"] and sp["list_status"] == "back" and sp["last_daily"] == "2026-10-31"
+    assert sp["item_lines"]["stats_line"] == (
+        "日增 +598（昨日未上日榜） · 总星 ⭐319,193 · 上线 404 天 · 近 30 天上榜 9 天 · 重回日榜（上次 10-31）")
+    assert sp["evidence"] == ["重回日榜（上次 10-31）"]
+    assert by["n/new"]["first_ever"] and "首次上榜" in by["n/new"]["item_lines"]["stats_line"]
+
+
+def test_check_rejects_first_listing_claim_for_repo_with_history(sp_conn):
+    p = g.build_payload(sp_conn)
+    ok = _digest(p)
+    assert g.check_digest(ok, p)["ok"], g.check_digest(ok, p)["problems"]
+    bad = ok.replace("**为什么涨**：重回日榜（上次 10-31）。", "**为什么涨**：首次上榜。")
+    assert bad != ok
+    probs = g.check_digest(bad, p)["problems"]
+    assert "o/sp: 「首次上榜」 but repo has earlier list history，上次日榜 2026-10-31" in probs
+    # A 「重回日榜」 claim for a genuinely new repo is rejected too.
+    bad2 = ok.replace("**为什么涨**：首次上榜。", "**为什么涨**：重回日榜。")
+    assert "n/new: 「重回日榜」 doesn't match the data" in g.check_digest(bad2, p)["problems"]
+
+
+def test_previous_scrape_not_yesterday_is_named(conn):
+    # Remove the 11-03 scrape: the previous scrape day becomes 11-02, so 「昨日」 would be wrong.
+    conn.execute("DELETE FROM trending_entries WHERE fetched_at = ?", (D1,))
+    by = {r["repo"]: r for r in g.build_payload(conn)["repos"]}
+    assert by["a/mem"]["item_lines"]["stats_line"].startswith("日增 +1,138（11-02 +1,000）")
+    assert by["b/new"]["item_lines"]["stats_line"].startswith("日增 +3,792（11-02 未上日榜）")

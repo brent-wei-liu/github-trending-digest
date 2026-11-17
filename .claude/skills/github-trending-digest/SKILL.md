@@ -18,7 +18,7 @@ Generate a daily Chinese-language digest of GitHub Trending across daily/weekly/
 1. A one-line **今日看点** hook (a star milestone or the biggest gainer).
 2. **涨星榜 Top 10**: the daily list re-ranked by 日增.
 3. **新锐榜**: up to 10 repos that went live ≤90 days ago **and** have <20,000 stars, not in 涨星榜; 首次上榜 first, then by average gain per day. Fewer qualify → show fewer (never loosen).
-4. Each ranked item has: a plain-language title, 「分类」「主体类型」 · language · license, a stats line (日增 with yesterday's 日增, 总星, 上线 N 天, 在榜 N 天, 首次上榜), **是什么** and an optional **为什么涨**: a reason only with concrete evidence (release/tag, announcement, blog/HN/news, related event, competitor license/pricing change); otherwise a short fact (「首次上榜」/「连续 N 天在榜」) or the line is omitted. Never restate star numbers as a reason (`check` rejects 日增/周增/总星/涨速/+N in that line).
+4. Each ranked item has: a plain-language title, 「分类」「主体类型」 · language · license, a stats line (日增 with the previous scrape day's 日增 — labelled 「昨日」 only if that scrape really was yesterday, else MM-DD; 总星; 上线 N 天; 近 30 天上榜 N 天 = distinct scrape days on any list in the last 30 days; and a status: 首次上榜 = never on any list before in our DB, 重回日榜（上次 MM-DD） = back on the daily list after missing the previous scrape day, 首次上日榜（此前上过周/月榜）), **是什么** and an optional **为什么涨**: a reason only with concrete evidence (release/tag, announcement, blog/HN/news, related event, competitor license/pricing change); otherwise a short fact copied from 证据候选 (「首次上榜」/「重回日榜（上次 MM-DD）」/「近 30 天上榜 N 天」) or the line is omitted. `check` rejects 「首次上榜」 for any repo with earlier list history and 「重回日榜」 that doesn't match the data. Never restate star numbers as a reason (`check` rejects 日增/周增/总星/涨速/+N in that line).
 5. **其他在榜**: at most 6 remaining repos (highest gain per day), one line each; the rest are omitted by the script and must not appear.
 6. **今天这三件事**: exactly 3 themes.
 7. A 1–2 line 口径 footnote.
@@ -65,7 +65,7 @@ Uses the latest scrape day in the DB, and the latest scrape of each period on th
 - `repos[]`: per repo:
   - `line_prefix` (`[owner/repo](url) · Lang · ⭐111,693 · 日榜第 1，日增 +1,138；…`) and `stats`
   - for ranked items, `item_lines` = `{tag_suffix, stats_line, anomaly_line?}`, copied verbatim into the digest
-  - the raw fields: `daily_delta`, `yesterday_daily_delta`, `age_days`, `streak_days`, `first_ever`, `license`, `owner_kind`, `milestone`, `anomaly_reason`, `release` (latest release/tag if ≤7 days old) and `evidence` (release line + 首次上榜 / 连续 N 天在榜, shown to the draft as 「证据候选」)
+  - the raw fields: `daily_delta`, `yesterday_daily_delta`, `age_days`, `listed_days_30`, `first_ever`, `list_status` (first / back / first_daily), `last_daily`, `status_label`, `prev_label`, `license`, `owner_kind`, `milestone`, `anomaly_reason`, `release` (latest release/tag if ≤7 days old) and `evidence` (release line + status label or 近 30 天上榜 N 天, shown to the draft as 「证据候选」)
 - `hook_facts`: milestone candidates (within 2% below 1k/5k/10k/…/1M, or crossed since a snapshot ≤3 days old) plus the top gainer
 - `footnote`
 - `prompts.draft`, `prompts.critique_template` (`{draft}`), `prompts.refine_template` (`{draft}`, `{critique}`; the scope guard is pre-filled)

@@ -31,6 +31,7 @@ LABELS = {"daily": ("日榜", "日增"), "weekly": ("周榜", "周增"), "monthl
 PERIOD_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
 
 TOP_N = 10
+LISTED_WINDOW_DAYS = 30   # 「近 30 天上榜 N 天」: distinct scrape days on any list
 # 新锐榜: young or small projects, ranked by average gain per day.
 YOUNG_DAYS = 90           # 新锐榜: created ≤ 90 days AND
 SMALL_STARS = 20_000      # total stars < 20,000
@@ -182,16 +183,42 @@ def latest_snapshot(conn, on_date=None):
     return _d(on_date), snaps
 
 
-def list_streak(repo_dates, scrape_dates, snap_date):
-    """Consecutive scrape days, ending today, on which the repo was on any list.
-    Days with no scrape at all are skipped rather than breaking the streak."""
-    n = 0
-    for d in sorted((d for d in scrape_dates if d <= snap_date), reverse=True):
-        if d in repo_dates:
-            n += 1
-        else:
-            break
-    return n
+def listed_days(repo_dates, snap_date, window=LISTED_WINDOW_DAYS):
+    """Distinct days in the last `window` days (incl. today) the repo was on ANY list.
+    Days we didn't scrape simply don't count, so N is a lower bound across data gaps."""
+    lo = snap_date - timedelta(days=window - 1)
+    return sum(1 for d in repo_dates if lo <= d <= snap_date)
+
+
+def list_status(any_dates, daily_dates, on_daily_today, prev_scrape_day, snap_date):
+    """('first' | 'back' | 'first_daily' | None, last daily date before today or None).
+
+    first       — never on any list (daily/weekly/monthly) before today in our DB
+    back        — on today's daily list, was on the daily list before, but not on the
+                  previous scrape day's daily list → 「重回日榜（上次 MM-DD）」
+    first_daily — on today's daily list for the first time, but seen on weekly/monthly before
+    """
+    if not any(d < snap_date for d in any_dates):
+        return "first", None
+    if not on_daily_today:
+        return None, None
+    before = [d for d in daily_dates if d < snap_date]
+    if not before:
+        return "first_daily", None
+    last = max(before)
+    if prev_scrape_day and last < prev_scrape_day:
+        return "back", last
+    return None, last
+
+
+def status_label(status, last_daily):
+    if status == "first":
+        return "首次上榜"
+    if status == "back":
+        return f"重回日榜（上次 {last_daily.strftime('%m-%d')}）"
+    if status == "first_daily":
+        return "首次上日榜（此前上过周/月榜）"
+    return None
 
 
 def milestone_for(stars, prev_stars):
@@ -259,11 +286,13 @@ def build_payload(conn, on_date=None, focus="default"):
             return True
         return any(k in f"{repo} {desc or ''}".lower() for k in kws)
 
-    scrape_dates = {_d(r[0]) for r in conn.execute(
-        "SELECT DISTINCT DATE(fetched_at) FROM trending_entries WHERE DATE(fetched_at) <= ?", (today,))}
     prev_day = conn.execute(
         "SELECT MAX(DATE(fetched_at)) FROM trending_entries WHERE DATE(fetched_at) < ?", (today,)
     ).fetchone()[0]
+    prev_day_d = _d(prev_day) if prev_day else None
+    # 「昨日」 only when the previous scrape really was yesterday; otherwise name the date.
+    prev_label = None if not prev_day_d else (
+        "昨日" if prev_day_d == snap_date - timedelta(days=1) else prev_day_d.strftime("%m-%d"))
     prev_daily = {}
     if prev_day:
         _, prev_snaps = latest_snapshot(conn, prev_day)
@@ -297,8 +326,12 @@ def build_payload(conn, on_date=None, focus="default"):
             for e in entries)
         stats = f"⭐{fmt_num(stars)} · {ranks}"
         age = (snap_date - _d(created)).days if created else None
-        streak = list_streak(dates, scrape_dates, snap_date)
-        first_ever = not any(d < snap_date for d in dates)
+        daily_dates = {_d(r[0]) for r in conn.execute(
+            "SELECT DISTINCT DATE(fetched_at) FROM trending_entries WHERE repo = ? AND period = 'daily' AND DATE(fetched_at) <= ?",
+            (repo, today))}
+        n30 = listed_days(dates, snap_date)
+        status, last_daily = list_status(dates, daily_dates, daily is not None, prev_day_d, snap_date)
+        first_ever = status == "first"
         release = release_evidence(releases.get(repo), snap_date)
         repos.append({
             "repo": repo,
@@ -316,10 +349,14 @@ def build_payload(conn, on_date=None, focus="default"):
             "created_at": created,
             "license": (lic or LICENSE_NONE) if created else None,
             "owner_kind": OWNER_KIND_LABEL.get(kind) if kind else None,
-            "streak_days": streak,
+            "listed_days_30": n30,
             "first_ever": first_ever,
+            "list_status": status,
+            "last_daily": last_daily.isoformat() if last_daily else None,
+            "status_label": status_label(status, last_daily),
+            "prev_label": prev_label,
             "release": release,
-            "evidence": evidence_lines(release, first_ever, streak),
+            "evidence": evidence_lines(release, status_label(status, last_daily), n30),
             "milestone": None if reasons else milestone_for(stars, prev_total[0] if prev_total else None),
             "anomaly": bool(reasons),
             "anomaly_reason": "；".join(reasons),
@@ -357,11 +394,13 @@ def build_payload(conn, on_date=None, focus="default"):
                           + (f"（昨日 {fmt_delta(top['yesterday_daily_delta'])}）"
                              if top["yesterday_daily_delta"] is not None else ""))
 
+    first_scrape = conn.execute("SELECT MIN(DATE(fetched_at)) FROM trending_entries").fetchone()[0]
     ts = max(snaps.values())
     scraped = f"{ts[:10]} {ts[11:16]} UTC"
     footnote = (
         f"口径：涨星榜按今日日增排序；新锐榜限上线 ≤{YOUNG_DAYS} 天且总星 <{fmt_num(SMALL_STARS)}（不含涨星榜），"
         f"首次上榜优先、再按日均增量排序，不凑数；其他在榜只列日均增量前 {OTHERS_MAX}（今日共 {len(repos)} 个在榜）。"
+        f"「首次上榜」= 本地记录（{first_scrape} 起）中从未上过任何榜；「近 30 天上榜」按有抓取的日子计。"
         f"日/周/月增来自三个独立榜单；「{ANOMALY_MARK}」为与本地快照比对的提示，不代表刷星。"
         f"数据：GitHub Trending（{scraped}）+ GitHub API。"
     )
@@ -407,7 +446,7 @@ def release_evidence(row, snap_date):
     return {"kind": kind, "tag": tag, "title": title, "date": published[:10], "days_ago": days}
 
 
-def evidence_lines(release, first_ever, streak):
+def evidence_lines(release, status, n30):
     """Facts the LLM may cite in 「为什么涨」 without a web call."""
     out = []
     if release:
@@ -415,10 +454,10 @@ def evidence_lines(release, first_ever, streak):
         name = f" 「{release['title']}」" if release["title"] and release["title"] != release["tag"] else ""
         when = "今天" if release["days_ago"] == 0 else f"{release['days_ago']} 天前"
         out.append(f"{release['date']}（{when}）{what} {release['tag']}{name}")
-    if first_ever:
-        out.append("首次上榜")
-    elif streak >= 2:
-        out.append(f"连续 {streak} 天在榜")
+    if status:
+        out.append(status)
+    elif n30 >= 2:
+        out.append(f"近 30 天上榜 {n30} 天")
     return out
 
 
@@ -430,18 +469,18 @@ def _item_lines(r):
 
     p = r["gain_period"]
     if p == "daily":
-        y = r["yesterday_daily_delta"]
+        y, when = r["yesterday_daily_delta"], r["prev_label"]
         gain = f"日增 {fmt_delta(r['daily_delta'])}" + (
-            f"（昨日 {fmt_delta(y)}）" if y is not None else "（昨日未上日榜）")
+            "" if when is None else f"（{when} {fmt_delta(y)}）" if y is not None else f"（{when}{'' if when == '昨日' else ' '}未上日榜）")
     else:
         e = next(e for e in r["entries"] if e["period"] == p)
         gain = f"{LABELS[p][1]} {fmt_delta(e['delta'])}（约 {fmt_delta(r['per_day_gain'])}/天）"
     bits = [gain, f"总星 ⭐{fmt_num(r['stars'])}"]
     if r["age_days"] is not None:
         bits.append(f"上线 {r['age_days']} 天")
-    bits.append(f"在榜 {r['streak_days']} 天")
-    if r["first_ever"]:
-        bits.append("首次上榜")
+    bits.append(f"近 30 天上榜 {r['listed_days_30']} 天")
+    if r["status_label"]:
+        bits.append(r["status_label"])
     out = {"tag_suffix": tag_suffix, "stats_line": " · ".join(bits)}
     if r["anomaly"]:
         out["anomaly_line"] = f"{ANOMALY_MARK}：{r['anomaly_reason']}"
@@ -550,10 +589,11 @@ def render_prompts(payload):
 3. 分类：一个短词，如 AI 编程、Agent 技能、开发工具、多媒体、安全、效率工具、学习资料、金融。主体类型、语言、许可已在标签行里给出，照抄。
 4. 是什么：1–2 句，具体说它做什么、怎么用，以官方描述为准，README 细节只作补充。不要复述功能清单。
 5. 为什么涨（最重要的规则）：只有找到具体证据时才写原因。算作证据的只有：新版本/标签发布（先看「证据候选」，近 7 天的 release/tag 已列出，无需联网查）、官方公告、博客/HN/新闻报道、相关的重要事件、竞品改许可或涨价。写原因时点明证据，如「11 月 2 日发布 v2.0，新增离线模式」「HN 首页讨论：……」。
-   - 找不到证据：只写一句简短事实，如「首次上榜」「连续 5 天在榜」，或者整行省略 `**为什么涨**`。
+   - 找不到证据：只写一句简短事实，且只能照抄「证据候选」里的事实（如「首次上榜」「重回日榜（上次 11-07）」「近 30 天上榜 12 天」），或者整行省略 `**为什么涨**`。
+   - 「首次上榜」「重回日榜」只能在数据行/证据候选里出现时才写，绝不能从「在榜天数少」或「昨日未上日榜」自行推断。
    - 禁止把星数当原因复述：这一行不得出现日增/周增/月增/总星/涨速/「+数字」——数据行里已经有了。禁止套话。
    - 反例（不要这样写）：「涨速较昨日回落，但仍是今天涨星最多的项目」「日增 +3,792，热度持续」「上线仅 45 天就收获大量关注」「AI 编程赛道持续火热，带动关注」（无证据的泛泛推测）。
-   - 正例：「11 月 3 日发布 v1.4，加入 Windows 支持」「LocalStack 社区版 10 月起收费后，作为免费替代被频繁推荐」（有出处时）「首次上榜」「连续 4 天在榜」。
+   - 正例：「11 月 3 日发布 v1.4，加入 Windows 支持」「LocalStack 社区版 10 月起收费后，作为免费替代被频繁推荐」（有出处时）「首次上榜」「近 30 天上榜 12 天」（照抄证据候选）。
    - 禁用「爆火」「疯狂」「炸裂」「神器」等夸张词。
 6. 其他在榜：每个项目一行 `- <行前缀> · <备注>`，备注不超过 20 个汉字、用白话。
 7. 数据待核：被标记项目照抄「待核行」或指定备注，不加评论；不要断言刷星，也不要对未标记项目做任何刷星、异常的暗示。被标记项目照常留在榜单里。
@@ -571,7 +611,7 @@ def render_prompts(payload):
 
 ## 背景（编辑部说明）
 
-- 榜单成员与顺序、每个项目的数据行（日增、昨日日增、总星、上线天数、在榜天数、首次上榜）、主体类型/语言/许可、「{ANOMALY_MARK}」行、链接行前缀与末尾口径脚注，都由脚本根据抓取数据和 GitHub API 生成，是权威数据。不要建议修改、调换或增删项目，也不要用你查到的实时星数替换。
+- 榜单成员与顺序、每个项目的数据行（日增、上次抓取日的日增、总星、上线天数、近 30 天上榜天数、首次上榜/重回日榜）、主体类型/语言/许可、「{ANOMALY_MARK}」行、链接行前缀与末尾口径脚注，都由脚本根据抓取数据和 GitHub API 生成，是权威数据。不要建议修改、调换或增删项目，也不要用你查到的实时星数替换。
 - 日/周/月增来自三个独立榜单，不成比例是正常的。
 
 ## 审稿要求
@@ -581,7 +621,7 @@ def render_prompts(payload):
 3. 「为什么涨」逐条检查（最重要）：每条原因是否有具体证据（版本发布、官方公告、博客/HN/新闻、相关事件、竞品改许可/涨价）？可联网核实。以下都算不合格，请逐条点名并给出改法：
    - 把星数/涨速当原因复述（如「涨速回落但仍第一」「日增 +3,792，热度持续」）；
    - 无证据的推测或泛泛套话（如「AI 赛道火热带动关注」）。
-   改法只有三种：换成你查到的有出处的原因（写明出处）；改成简短事实（「首次上榜」「连续 N 天在榜」）；或建议整行删除。
+   改法只有三种：换成你查到的有出处的原因（写明出处）；改成简短事实（「首次上榜」「重回日榜（上次 MM-DD）」「近 30 天上榜 N 天」，须与数据行一致）；或建议整行删除。
 4. 分类标签是否合理？其他在榜的一行备注是否准确、不超过 20 字？
 5. 今日看点是否抓人且属实？「今天这三件事」是否有洞察、正好 3 条？
 6. 整体是否简洁，有没有套话和重复？
@@ -604,7 +644,7 @@ def render_prompts(payload):
 2. 行首链接、标签行里的主体类型/语言/许可、数据行、待核行、其他在榜的行前缀、末尾口径脚注一字不改。
 3. 数据待核项目：{anomalies}。保留待核行原样，不断言刷星，项目留在原位置。
 4. 审稿意见与数据冲突时以数据为准；初稿写了官方描述、README 或可查来源都没有的具体事实时，按审稿意见删改。
-5. 「为什么涨」只保留有证据的原因（版本发布、公告、博客/HN/新闻、相关事件、竞品改许可/涨价）；没有证据的改成简短事实（「首次上榜」「连续 N 天在榜」）或删掉整行。这一行不得出现日增/周增/月增/总星/涨速/「+数字」，不写「涨速回落但仍第一」之类套话。
+5. 「为什么涨」只保留有证据的原因（版本发布、公告、博客/HN/新闻、相关事件、竞品改许可/涨价）；没有证据的改成简短事实（只用数据行里已有的「首次上榜」「重回日榜（上次 MM-DD）」「近 30 天上榜 N 天」）或删掉整行；数据行没写「首次上榜」的项目绝不能写首次上榜。这一行不得出现日增/周增/月增/总星/涨速/「+数字」，不写「涨速回落但仍第一」之类套话。
 6. 保持格式：白话标题 ≤20 字；是什么 1–2 句、为什么涨 1 句（可省略）；其他在榜每项一行、备注 ≤20 字；今天这三件事正好 3 条。
 7. 终稿直接输出，不要包含修改说明。"""
 
@@ -615,6 +655,14 @@ def render_prompts(payload):
 
 _HEAD_RE = re.compile(r"^###\s*(\d+)\.\s*\[([^\]]+)\]\(https://github\.com/([^)\s]+)\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(https://github\.com/([^)\s]+)\)")
+
+
+def _status_claims(name, body, r, problems):
+    if "首次上榜" in body and not r.get("first_ever"):
+        last = f"，上次日榜 {r['last_daily']}" if r.get("last_daily") else ""
+        problems.append(f"{name}: 「首次上榜」 but repo has earlier list history{last}")
+    if "重回日榜" in body and r.get("list_status") != "back":
+        problems.append(f"{name}: 「重回日榜」 doesn't match the data")
 
 
 def check_digest(text, payload):
@@ -669,6 +717,16 @@ def check_digest(text, payload):
             title = blk[0].split(")", 1)[1].lstrip(" ·") if ")" in blk[0] else ""
             if len(title) > 22:
                 warnings.append(f"title over 20 chars for {name}: {title}")
+
+    # 「首次上榜」/「重回日榜」 must match the computed status, wherever the repo is written up.
+    for heading in (GAINERS_HEADING, RISING_HEADING):
+        for name, blk in blocks(section(heading)):
+            if name in repos:
+                _status_claims(name, "\n".join(blk), repos[name], problems)
+    for ln in section(OTHERS_HEADING):
+        for m in _LINK_RE.finditer(ln):
+            if m.group(2) in repos:
+                _status_claims(m.group(2), ln, repos[m.group(2)], problems)
 
     for name in payload["others"]:
         r = repos[name]
