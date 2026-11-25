@@ -19,7 +19,7 @@ side of it (own_interp; 7d: ≤14-day gap, 30d: ≤30-day gap). While history is
   7d  → falls back to GitHub's weekly-list number   (source github_weekly)
   30d → falls back to GitHub's monthly-list number  (source github_monthly),
         then to the gain since our first observation in the window (own_partial,
-        a lower bound)
+        a lower bound; also preferred over github_monthly when it is already larger)
   1d  → falls back to GitHub's daily-list number    (source github_daily)
 Every gain carries its source so the digest / UI can label it.
 
@@ -48,6 +48,7 @@ WINDOWS = {1: 0, 7: 1, 30: 3}   # N-day gain → allowed baseline slack (days)
 DISAGREE = 0.05            # api vs trending total on the same day: >5% apart → use api
 
 SRC_OWN, SRC_INTERP, SRC_PARTIAL = "own", "own_interp", "own_partial"
+PARTIAL_MIN_SPAN = 7       # own_partial needs at least a week of our own history
 INTERP_MAX_GAP = {1: 0, 7: 14, 30: 30}   # max days between the two bracketing observations
 GH_FALLBACK = {1: ("daily", "github_daily"), 7: ("weekly", "github_weekly"),
                30: ("monthly", "github_monthly")}
@@ -228,9 +229,13 @@ def gains(obs, today, github=None):
             period, gh_src = GH_FALLBACK[n]
             if github.get(period) is not None:
                 g, src = github[period], gh_src
-        if g is None and n == 30 and now_d == today:
+        if n == 30 and now_d == today and src in (None, "github_monthly"):
+            # Own lower bound since our first observation in the window; also used when it is
+            # already larger than GitHub's monthly number (which then must be stale/short).
             first = min((d for d in obs if today - timedelta(days=n) <= d < today), default=None)
-            if first is not None:
+            if first is not None and (today - first).days < PARTIAL_MIN_SPAN:
+                first = None          # a 1–6 day lower bound says nothing about 30 days
+            if first is not None and (g is None or obs[today] - obs[first] > g):
                 g, src, span = obs[today] - obs[first], SRC_PARTIAL, (today - first).days
         res[f"g{n}"], res[f"src{n}"] = g, src
         if n == 30:

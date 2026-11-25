@@ -119,3 +119,63 @@ to keep the digest informative when GitHub's lists barely move.
   Spot-checked 22, all accurate to the README; none mention star numbers.
 - Smoke run of the full `github_fetch.py` on a scratch DB copy: 186 star readings,
   0 README refetches (cached), 187 lifecycle rows, ~2 min.
+
+## Phase 3 — new self-contained daily email (2026-11-25)
+
+**Built** `digest_v2.py` (query / render / check / save-summary).
+- Python builds the payload and every line: 今日变化 (new or status-changed repos +
+  milestones, priority 新上榜 > 爆发 > 里程碑 > 回榜 > 持续走红 > 降温; ≤ 8 detailed, the rest
+  and all 掉榜 on one compact line), 30 天热度总榜 Top 30 by our 30d gain (every day,
+  one line: link · cached 是什么 · 30 天 · 7 天 · status), 新锐榜 (≤ 90 days AND < 20,000
+  stars, by 7d gain, ≤ 10, never padded), a 2-line footnote. Gains print plain when own,
+  `*` when borrowed from GitHub's list, `≥` for a lower bound.
+- Every repo name links to its web UI page `http://little-claws-mac-mini.local:8082/repo/owner/repo`;
+  detailed items also link to GitHub.
+- The LLM returns JSON only: `why` (exactly the upward 今日变化 repos; "" = omit),
+  `themes` (exactly 3, repos must be in the email), `what` (only for repos missing
+  from the cache, saved to the cache after validation). `validate_llm` rejects star
+  numbers, status-as-reason (首次上榜/新上榜), > 80 chars, wrong keys, foreign repos.
+  `check` re-validates the final markdown: title, headings, verbatim Python lines,
+  links only to today's repos, 为什么涨 rules, 「新上榜」 only where the data says so,
+  3 themes, footnote.
+- Draft → Critique → Refine kept for now (Phase 6 compares); the critic sees only the
+  rendered email.
+
+**Verified**
+- 5 new tests (rankings on a synthetic DB: monthly giant leads the 30d list, brand-new
+  repo → 新上榜 change, come-and-go → 回榜, render/check round-trip, bad-JSON rejection,
+  edited numbers / foreign links / fake 「新上榜」 / missing footnote caught). Suite: 85 passed.
+- Fixes found while verifying: own_partial now beats a smaller GitHub monthly number
+  (BugHunter showed 30d +13,817* next to 7d +12,296) and needs ≥ 7 days of own history
+  (firecrawl showed 30d ≥+1,112 from one day); 新锐榜 no longer requires being listed
+  today; footnote cut to 2 lines.
+- 2026-11-24 end to end: writer JSON passed validation first time; critique B (BugHunter's
+  "reason" was coverage that followed the rise, dsh cited a community build, one theme
+  mis-cast magpie); refine fixed all, passed after shortening two over-long lines;
+  `check` ok. 4 detailed changes (dsh 新上榜, BugHunter 破 2 万, app-store-compliance
+  破 5,000, minimind 持续走红), Top 30, 新锐榜 3.
+- 2026-11-20 end to end (writer only): `check` ok. All ten of v2code's monthly Top 10
+  are in the 30 天热度总榜 at #1–#12 with their 30d/7d gains and status.
+- Email size (MIME, as sent):
+
+  | | chars | MIME | repos |
+  |---|---|---|---|
+  | current main, 11-17 | 4,619 | 23,770 B | 16 |
+  | current main, 11-24 | 5,784 | 28,592 B | 18 |
+  | v2, 11-20 | 7,288 | 29,896 B | 37 |
+  | v2, 11-24 | 7,741 | 32,209 B | 37 |
+
+  ~+12 % bytes for twice the repos covered; HTML structure ok (h2 sections, one `<ol>`
+  for the Top 30, `<ul>` for 新锐榜); plain-text part is clean.
+- Per stage (11-24 v2 vs the current pipeline's last measured run, 11-17):
+
+  | Stage | current: time / web / tokens | v2: time / web / tokens |
+  |---|---|---|
+  | Draft | 46 s / 0 / 62k | 50 s / 2 / 61k |
+  | Critique | 134 s / 10 / 72k | 111 s / 8 / 70k |
+  | Refine | 70 s / 0 / 72k | 70 s / 0 / 65k |
+  | Total | 250 s / 10 / 206k | 231 s / 10 / 196k |
+
+  (11-20 v2 writer: 60 s / 3 web / 63k.) Cost is about the same; the LLM now writes
+  far less text, so Phase 6 tests dropping Critique/Refine.
+- Not verified here: the UI links resolve (Phase 4).

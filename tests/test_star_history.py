@@ -133,3 +133,15 @@ def test_interpolation_can_use_todays_reading_as_the_later_point():
     # Last seen on a list 10 days ago, API reading today: 7d ≈ 7/10 of the 10-day gain.
     g = sh.gains(_obs(d0=11_000, d10=10_000), D)
     assert (g["g7"], g["src7"]) == (700, "own_interp")
+
+
+def test_partial_lower_bound_beats_smaller_github_monthly():
+    g = sh.gains(_obs(d0=21_174, d9=7_000), D, {"monthly": 13_817})
+    assert (g["g30"], g["src30"]) == (14_174, "own_partial")
+    g = sh.gains(_obs(d0=21_174, d3=20_000), D, {"monthly": 13_817})
+    assert (g["g30"], g["src30"]) == (13_817, "github_monthly")
+
+
+def test_partial_needs_a_week_of_history():
+    assert sh.gains(_obs(d0=205_083, d1=203_971), D)["g30"] is None
+    assert sh.gains(_obs(d0=5_000, d7=4_000), D)["src30"] in ("own_partial", "own_interp")
