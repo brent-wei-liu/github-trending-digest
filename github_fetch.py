@@ -154,6 +154,19 @@ def cmd_fetch(conn, args=None):
     except Exception as e:  # metadata is optional; never fail the scrape over it
         stats["repo_meta"] = {"error": f"{type(e).__name__}: {e}"}
 
+    # Own star history: one API reading per active repo per day (+ trending totals).
+    try:
+        import repo_meta
+        import star_history
+        star_history.backfill_from_trending(conn)
+        today = datetime.fromisoformat(now).date()
+        res = star_history.record_api(conn, star_history.active_repos(conn, today),
+                                      repo_meta.get_token(), today=today)
+        stats["star_history"] = {k: res[k] for k in ("checked", "recorded", "cached", "remaining",
+                                                     "rate_limited")} | {"failed": len(res["failed"])}
+    except Exception as e:  # never fail the scrape over it
+        stats["star_history"] = {"error": f"{type(e).__name__}: {e}"}
+
     import zoneinfo
     local_hour = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).hour
     if report_hour is not None:
