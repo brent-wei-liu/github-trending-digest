@@ -56,18 +56,21 @@ def load_settings():
     return settings
 
 
-def load_summary(date=None):
-    """Return (date, content) for the newest summary, optionally on one date."""
+KINDS = {"daily": "GitHub Trending {date}", "weekly": "GitHub Trending 周报 {date}"}
+
+
+def load_summary(date=None, kind="daily"):
+    """Return (date, content) for the newest summary of this kind, optionally on one date."""
     conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     try:
         if date:
             row = conn.execute(
-                "SELECT date, content FROM summaries WHERE date = ? ORDER BY id DESC LIMIT 1",
-                (date,),
+                "SELECT date, content FROM summaries WHERE date = ? AND period = ? ORDER BY id DESC LIMIT 1",
+                (date, kind),
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT date, content FROM summaries ORDER BY id DESC LIMIT 1"
+                "SELECT date, content FROM summaries WHERE period = ? ORDER BY id DESC LIMIT 1", (kind,)
             ).fetchone()
     finally:
         conn.close()
@@ -76,8 +79,9 @@ def load_summary(date=None):
     return row
 
 
-def find_sent(date):
-    """Return the logged send for this digest date, or None."""
+def find_sent(date, kind="daily"):
+    """Return the logged send for this digest date and kind, or None. Entries written
+    before kinds existed have no "kind" and count as daily."""
     if not SENT_LOG_PATH.exists():
         return None
     for line in SENT_LOG_PATH.read_text(encoding="utf-8").splitlines():
@@ -85,14 +89,15 @@ def find_sent(date):
             entry = json.loads(line)
         except ValueError:
             continue
-        if entry.get("date") == date:
+        if entry.get("date") == date and entry.get("kind", "daily") == kind:
             return entry
     return None
 
 
-def log_sent(date, recipient, subject):
+def log_sent(date, recipient, subject, kind="daily"):
     entry = {
         "date": date,
+        "kind": kind,
         "to": recipient,
         "subject": subject,
         "sent_at": datetime.now(timezone.utc).isoformat(),
@@ -241,6 +246,8 @@ def main(argv=None):
     ap.add_argument("--force", action="store_true",
                     help="Send even if this date's digest was already sent")
     ap.add_argument("--html-out", help="Also write the rendered HTML to this path")
+    ap.add_argument("--kind", choices=sorted(KINDS), default="daily",
+                    help="daily digest or weekly report (own subject and dedupe key)")
     args = ap.parse_args(argv)
 
     try:
@@ -248,7 +255,7 @@ def main(argv=None):
             date = args.date or datetime.now(timezone.utc).strftime("%Y-%m-%d")
             body = Path(args.file).read_text(encoding="utf-8")
         else:
-            date, body = load_summary(args.date)
+            date, body = load_summary(args.date, args.kind)
     except (LookupError, OSError, sqlite3.Error) as e:
         return fail(f"could not load digest: {e}", 1)
     if not body.strip():
@@ -261,7 +268,7 @@ def main(argv=None):
     if not recipient:
         return fail(f"DIGEST_RECIPIENT is not set in the environment or {ENV_PATH}", 2)
 
-    subject = f"GitHub Trending {date}"
+    subject = KINDS[args.kind].format(date=date)
     if args.orphan:
         subject = f"[ORPHAN: not in DB] {subject}"
     msg = build_message(user or "(GMAIL_SMTP_USER not set)", recipient, subject, body)
@@ -269,7 +276,7 @@ def main(argv=None):
     if args.html_out:
         Path(args.html_out).write_text(rendered, encoding="utf-8")
 
-    previous = find_sent(date)
+    previous = find_sent(date, args.kind)
     if args.dry_run:
         for key in ("Subject", "From", "To", "Date", "Message-ID", "Content-Type"):
             print(f"{key}: {msg[key]}")
@@ -281,7 +288,7 @@ def main(argv=None):
         return 0
 
     if previous and not args.force:
-        print(json.dumps({"sent": False, "skipped": True, "date": date,
+        print(json.dumps({"sent": False, "skipped": True, "date": date, "kind": args.kind,
                           "sent_at": previous.get("sent_at")}, ensure_ascii=False))
         return 0
 
@@ -295,7 +302,7 @@ def main(argv=None):
         return fail(f"{type(e).__name__}: {e}", 1)
     result = {"sent": True, "to": recipient, "subject": subject}
     try:
-        log_sent(date, recipient, subject)
+        log_sent(date, recipient, subject, args.kind)
     except OSError as e:
         result["warning"] = f"sent, but could not log it, so a re-run would resend: {e}"
     print(json.dumps(result, ensure_ascii=False))

@@ -75,10 +75,11 @@ def env(tmp_path, monkeypatch):
 
     db = tmp_path / "t.db"
     conn = sqlite3.connect(db)
-    conn.execute("CREATE TABLE summaries (id INTEGER PRIMARY KEY, date TEXT, content TEXT)")
+    conn.execute("CREATE TABLE summaries (id INTEGER PRIMARY KEY, date TEXT, period TEXT, content TEXT)")
     conn.executemany(
-        "INSERT INTO summaries (date, content) VALUES (?, ?)",
-        [("2026-01-01", "# old"), ("2026-01-02", "# first"), ("2026-01-02", "# 最新 **b**")],
+        "INSERT INTO summaries (date, period, content) VALUES (?, ?, ?)",
+        [("2026-01-01", "daily", "# old"), ("2026-01-02", "daily", "# first"),
+         ("2026-01-02", "daily", "# 最新 **b**"), ("2026-01-02", "weekly", "# 周报 **w**")],
     )
     conn.commit()
     conn.close()
@@ -223,3 +224,32 @@ def test_bad_password_reports_535_not_disconnect(env, monkeypatch, capsys):
     assert "535" in error and "BadCredentials" in error
     assert "".join(SECRET.split()) not in out
     assert email_sender.find_sent("2026-01-02") is None
+
+
+def test_weekly_kind_has_own_subject_source_and_dedupe(env, capsys):
+    add_creds(env)
+    assert email_sender.main(["--date", "2026-01-02"]) == 0           # daily first
+    daily = json.loads(capsys.readouterr().out)
+    assert daily["subject"] == "GitHub Trending 2026-01-02"
+    assert "最新" in FakeSMTP.instances[-1].sent.get_payload()[0].get_payload(decode=True).decode()
+
+    assert email_sender.main(["--date", "2026-01-02", "--kind", "weekly"]) == 0
+    weekly = json.loads(capsys.readouterr().out)
+    assert weekly["sent"] is True and weekly["subject"] == "GitHub Trending 周报 2026-01-02"
+    assert "周报" in FakeSMTP.instances[-1].sent.get_payload()[0].get_payload(decode=True).decode()
+
+    assert email_sender.main(["--date", "2026-01-02", "--kind", "weekly"]) == 0
+    assert json.loads(capsys.readouterr().out)["skipped"] is True
+    assert email_sender.find_sent("2026-01-02", "weekly")["kind"] == "weekly"
+    assert email_sender.find_sent("2026-01-02")["subject"] == "GitHub Trending 2026-01-02"
+
+
+def test_log_entries_without_kind_count_as_daily(env):
+    email_sender.SENT_LOG_PATH.write_text('{"date": "2026-01-02", "subject": "old"}\n')
+    assert email_sender.find_sent("2026-01-02")["subject"] == "old"
+    assert email_sender.find_sent("2026-01-02", "weekly") is None
+
+
+def test_daily_never_picks_a_weekly_row(env):
+    assert email_sender.load_summary("2026-01-02") == ("2026-01-02", "# 最新 **b**")
+    assert email_sender.load_summary("2026-01-02", "weekly") == ("2026-01-02", "# 周报 **w**")

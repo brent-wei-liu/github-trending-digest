@@ -220,3 +220,40 @@ to keep the digest informative when GitHub's lists barely move.
 - Not verifiable from here: opening the links on the phone itself (needs the phone on
   the same Wi-Fi; mDNS `.local` works on iOS). The links go live on :8082 only after
   deploy, when the launchd server restarts on the merged code.
+
+## Phase 5 — weekly deep report (2026-11-25)
+
+**Built**
+- `weekly_digest.py` (query / render / check / save-summary with period `weekly`).
+  Sections: 本周概览 (LLM, 2–3 sentences) · 本月 Top 10 by our 30d gain (each: status,
+  cached 是什么, numbers incl. last week's 30d rank, 深读 2–3 sentences, evidence-only
+  为什么涨) · 本周 Top 10 by 7d gain (items already written up are one line pointing
+  to 本月榜 #N) · 本周涨跌 (new entrants to the 30d Top 20, 5 biggest 7d accelerations
+  and decelerations vs the 7d gain a week earlier, only repos with ≥ 1,000/week) ·
+  本周状态事件 (新上榜 / 爆发 / 里程碑 / 降温 in the last 7 days, first occurrence each) ·
+  本周观察 (3 themes) · footnote. Same JSON-only contract and `check` as the daily.
+- `email_sender.py --kind weekly`: subject 「GitHub Trending 周报 YYYY-MM-DD」, loads
+  only `period='weekly'` summaries, its own dedupe key (`kind` in email_sent.jsonl;
+  old entries without `kind` count as daily). The daily now loads only
+  `period='daily'` rows, so a weekly saved the same day can't be mailed as the daily.
+- The Monday scheduled task is registered at deploy (it runs against main).
+
+**Verified**
+- Tests: 3 weekly (sections from a synthetic DB, render/check round-trip, bad-JSON and
+  edited-number rejections, unknown last week ≠ entrant), 3 email (weekly subject /
+  source / dedupe, legacy log entries, daily never picks a weekly row). Suite: 91 passed.
+- Generated for Monday 2026-11-23 (writer only: 89 s, 6 web searches, 73k tokens; JSON
+  passed validation first time; `check` ok): 10,231 chars, 43,740 B MIME. 本月 Top 10 =
+  t3code, security-audit, impeccable, hallmark, OpenMausBot, sherlock, magpie,
+  superpowers, DeepTutor, astryx; 本周 Top 10 led by Claude-BugHunter (+12,201) and
+  t3code (+11,812); accelerations t3code +8,889 → +11,812; decelerations astryx
+  +10,255 → +3,041, security-audit +6,049 → +3,701.
+- Fixed while verifying: the events list leaked 「持续走红」 through milestone rows;
+  repos with no 30d number last week were labelled 「上周未进 30 天榜」 and counted as
+  entrants (now 「上周无 30 天数据」 and excluded — with daily API readings this gap closes
+  within a week); a double blank line before 本周涨跌.
+- Edited by hand before sending: BugHunter's 为什么涨 cited an aggregator article that
+  followed its rise (blanked, same call the daily critique made).
+- Quality caveat: theme 1's 「开发者同时用多个编程 Agent … 成了刚需」 is an unsupported
+  generalisation that validation can't catch; Phase 6 decides whether a critique /
+  fact-check step is worth its cost.
