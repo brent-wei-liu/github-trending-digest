@@ -179,3 +179,44 @@ to keep the digest informative when GitHub's lists barely move.
   (11-20 v2 writer: 60 s / 3 web / 63k.) Cost is about the same; the LLM now writes
   far less text, so Phase 6 tests dropping Critique/Refine.
 - Not verified here: the UI links resolve (Phase 4).
+
+## Phase 4 — web UI project pages (2026-11-25)
+
+**Built**
+- `GET /repo/{owner}/{name}` → `static/repo.html`; `GET /api/project/{owner}/{name}` →
+  profile (是什么, owner type, language, license, created_at, first_seen), latest
+  lifecycle row, raw + merged star history, list appearances (latest scrape per
+  day/list), lifecycle history, digests that mention the repo (newest per date).
+- Page: header with status chips + GitHub link; tiles 总星 / 今日 / 7 天 / 30 天 with the
+  gain source spelled out; star-trend line (2px, crosshair + tooltip, breaks across
+  gaps > 3 days, isolated readings as dots, table view toggle); 60-day list timeline
+  (日榜 / 周榜 / 月榜 rows, per-cell tooltip with rank and number); status transitions
+  with their reasons; past digests (15 shown, "显示全部" for the rest) linking to
+  `/?digest=ID`.
+- `/about`: every gain mark and status threshold in plain Chinese (the email footnote
+  points here). `index.html` opens `/?digest=ID` directly.
+- `api.py` port is configurable (`GH_TRENDING_PORT`, default 8082) so the redesign
+  could be tested on :8090 while main keeps serving :8082 (8083–8086 are taken by
+  other projects' servers).
+- Colours: reference palette slots 1–3 (blue/orange/aqua) for daily/weekly/monthly
+  and the star line, light + dark steps; `validate_palette.js --pairs all` passes in
+  both modes (light aqua below 3:1 → rows carry visible labels and the chart has a
+  table view).
+
+**Verified**
+- `tests/ui/test_project_pages.py` (8 Playwright tests: API shape, 404, full render,
+  tooltip + table toggle, unknown-repo error, digest deep link opens the modal with
+  the repo in it, /about defines every status, no horizontal scroll at 375 px). Whole
+  UI suite against the redesign server: 18 passed (10 existing + 8 new). Unit suite: 85.
+- Loaded by hand: obra/superpowers (daily cells 10-27..10-31, weekly through 11-07,
+  transitions 回榜 10-27, 持续走红 10-31, 掉榜 11-08, 回榜 11-17, 持续走红 11-21),
+  cloudflare/security-audit-skill on a phone viewport (降温, 30 天 +31,431, smooth line),
+  Ebony-Vinyl/dsh-our-free-model (two readings, 新上榜), `/?digest=155`.
+- Fixed while verifying: isolated readings were invisible on the chart (dots added);
+  the digests list was 64 links long (collapsed).
+- `little-claws-mac-mini.local` resolves on this machine (200 from :8082 and :8090,
+  LAN IP 192.168.1.76). Every UI link in the rendered 11-24 (35) and 11-20 (32) emails
+  resolves to a 200 project page.
+- Not verifiable from here: opening the links on the phone itself (needs the phone on
+  the same Wi-Fi; mDNS `.local` works on iOS). The links go live on :8082 only after
+  deploy, when the launchd server restarts on the merged code.

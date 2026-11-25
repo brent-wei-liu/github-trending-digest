@@ -1444,6 +1444,9 @@ $('#starred-toggle').addEventListener('click', () => {
 (async function init() {
   await loadStats();
   loadRepos();
+  // Deep link from a project page: /?digest=ID opens that digest.
+  const dg = new URLSearchParams(location.search).get('digest');
+  if (dg && /^\d+$/.test(dg)) { switchTab('digests'); openDigest(dg); }
 })();
 </script>
 </body>

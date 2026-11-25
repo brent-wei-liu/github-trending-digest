@@ -3,8 +3,9 @@
 Run: python3 api.py
 URL: http://127.0.0.1:8082 (local), http://<mac-ip>:8082 (LAN/phone)
 """
+import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -15,7 +16,7 @@ import uvicorn
 sys.path.insert(0, str(Path(__file__).parent))
 from db import get_db, init_db
 
-PORT = 8082
+PORT = int(os.environ.get("GH_TRENDING_PORT", "8082"))
 HOST = "0.0.0.0"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -207,6 +208,79 @@ def api_digest_mark_unread(digest_id: int):
         if cur.rowcount == 0:
             raise HTTPException(404, "digest not found")
         return {"ok": True, "is_read": False}
+    finally:
+        conn.close()
+
+
+# ---------- project pages (redesign phase 4) ----------
+
+@app.get("/repo/{owner}/{name}")
+def repo_page(owner: str, name: str):
+    return FileResponse(str(STATIC_DIR / "repo.html"))
+
+
+@app.get("/about")
+def about_page():
+    return FileResponse(str(STATIC_DIR / "about.html"))
+
+
+@app.get("/api/project/{owner}/{name}")
+def api_project(owner: str, name: str):
+    """Everything about one repo: profile, star history, list appearances, lifecycle,
+    digests that mention it."""
+    import lifecycle
+    import project_memory
+    import star_history
+    from repo_meta import OWNER_KIND_LABEL, ensure_release_table, ensure_table
+
+    repo = f"{owner}/{name}"
+    conn = _conn()
+    try:
+        ensure_table(conn)
+        ensure_release_table(conn)
+        star_history.ensure_table(conn)
+        lifecycle.ensure_table(conn)
+        project_memory.ensure_table(conn)
+        prof = project_memory.profile(conn, repo)
+        if not prof:
+            raise HTTPException(404, "repo not found")
+        prof.pop("what_basis", None)
+        prof.pop("readme_excerpt", None)
+        prof["owner_label"] = OWNER_KIND_LABEL.get(prof.get("owner_kind")) if prof.get("owner_kind") else None
+        stars = [{"date": d, "stars": s, "source": src} for d, s, src in conn.execute(
+            "SELECT date, stars, source FROM star_history WHERE repo = ? ORDER BY date, source", (repo,))]
+        merged = sorted(((str(d), v) for d, v in star_history.observations(conn, repo).items()))
+        lists = [{"date": d, "period": p, "rank": r, "delta": dl} for d, p, r, dl in conn.execute(
+            """SELECT DATE(fetched_at), period, MIN(rank), MAX(stars_delta) FROM trending_entries t
+               WHERE repo = ? AND fetched_at = (SELECT MAX(fetched_at) FROM trending_entries t2
+                     WHERE t2.period = t.period AND DATE(t2.fetched_at) = DATE(t.fetched_at))
+               GROUP BY 1, 2 ORDER BY 1""", (repo,))]
+        cols = ("date", "status", "milestone", "reason", "g1", "g7", "g30", "src1", "src7", "src30",
+                "stars", "listed")
+        life = [dict(zip(cols, r)) for r in conn.execute(
+            f"SELECT {', '.join(cols)} FROM lifecycle WHERE repo = ? ORDER BY date", (repo,))]
+        digests = [{"id": i, "date": d} for i, d in conn.execute(
+            "SELECT id, date FROM summaries WHERE content LIKE ? ORDER BY date DESC, id DESC",
+            (f"%{repo}%",))]
+        seen, uniq = set(), []
+        for dg in digests:            # one link per date (the newest version)
+            if dg["date"] not in seen:
+                seen.add(dg["date"])
+                uniq.append(dg)
+        rel = conn.execute("SELECT kind, tag, title, published_at FROM repo_release WHERE full_name = ?",
+                           (repo,)).fetchone()
+        return {
+            "repo": repo, "github": f"https://github.com/{repo}", "profile": prof,
+            "latest": life[-1] if life else None,
+            "star_history": stars, "stars_merged": [{"date": d, "stars": v} for d, v in merged],
+            "lists": lists, "lifecycle": life, "digests": uniq,
+            "release": dict(zip(("kind", "tag", "title", "published_at"), rel)) if rel else None,
+            "thresholds": {
+                "burst_min_1d": lifecycle.BURST_MIN_1D, "burst_ratio": lifecycle.BURST_RATIO,
+                "hot_min_avg": lifecycle.HOT_MIN_AVG, "hot_min_days": lifecycle.HOT_MIN_DAYS,
+                "cool_ratio": lifecycle.COOL_RATIO, "cool_min_avg": lifecycle.COOL_MIN_AVG,
+            },
+        }
     finally:
         conn.close()
 

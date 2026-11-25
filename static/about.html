@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Digest Methodology</title>
+<style>
+:root { color-scheme: light; --bg: #f6f4ef; --surface-1: #fcfcfb; --ink: #1c2434; --ink-soft: #4a5670;
+        --line: rgba(28, 36, 52, 0.10); --accent: #2a5fa8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; --bg: #121211; --surface-1: #1a1a19; --ink: #f0efec;
+        --ink-soft: #c3c2b7; --line: rgba(240, 239, 236, 0.10); --accent: #7fb0f0; }
+}
+:root[data-theme="dark"] { color-scheme: dark; --bg: #121211; --surface-1: #1a1a19; --ink: #f0efec;
+        --ink-soft: #c3c2b7; --line: rgba(240, 239, 236, 0.10); --accent: #7fb0f0; }
+body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.65; font-size: 15px;
+       font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif; }
+main { max-width: 760px; margin: 0 auto; padding: 20px 16px 48px; }
+a { color: var(--accent); }
+h1 { font-size: 24px; } h2 { font-size: 16px; margin-top: 26px; }
+.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 14px; padding: 4px 18px; }
+dt { font-weight: 600; margin-top: 12px; } dd { margin: 2px 0 10px; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+<main>
+<a href="/">← GitHub Trending Digest</a>
+<h1>口径说明</h1>
+
+<h2>涨幅</h2>
+<div class="card"><dl>
+  <dt>30 天 / 7 天 / 今日</dt>
+  <dd>今天的总星数减去 30 / 7 / 1 天前的总星数。总星数是我们每天自己记录的：抓取 GitHub Trending 页面时看到的数字，加上每天用 GitHub API 读一次过去 30 天上过榜的所有项目。没有恰好那天的记录时，用前后两次记录线性插值。</dd>
+  <dt>带 * 的数字</dt>
+  <dd>我们的历史还不够时，借用 GitHub 日榜 / 周榜 / 月榜上的数字。GitHub 统计的是新增星标（不扣除取消的），窗口也和我们不同，所以通常比我们的数字高 5–10%。</dd>
+  <dt>带 ≥ 的数字</dt>
+  <dd>只记录了不到 30 天：这是自第一次记录以来的涨幅，是下限。至少要有 7 天记录才显示。</dd>
+</dl></div>
+
+<h2>状态（每天按固定阈值计算）</h2>
+<div class="card"><dl>
+  <dt>新上榜</dt><dd>今天上了任何一个榜（日 / 周 / 月），而我们的记录里（2026-03-25 起）它从未上过榜。</dd>
+  <dt>爆发</dt><dd>单日涨 ≥ 1,000 星，且至少是它前一周日均涨幅的 3 倍。</dd>
+  <dt>回榜</dt><dd>今天在榜，上次抓取不在榜，以前上过榜。</dd>
+  <dt>掉榜</dt><dd>上次抓取在榜，今天不在任何榜。</dd>
+  <dt>降温</dt><dd>30 天日均 ≥ 300 星，而最近 7 天的日均不到 30 天日均的一半。</dd>
+  <dt>持续走红</dt><dd>最近 7 天日均 ≥ 500 星，最近 7 次抓取里至少 5 次在榜，且今天仍涨 ≥ 250 星。</dd>
+  <dt>里程碑</dt><dd>总星数今天越过 1 千 / 5 千 / 1 万 / 2 万 / 5 万 / 10 万 / 20 万 / 30 万 / 50 万 / 100 万。</dd>
+</dl></div>
+
+<h2>其他</h2>
+<div class="card"><dl>
+  <dt>新锐榜</dt><dd>创建不超过 90 天且总星少于 20,000 的项目，按 7 天涨幅排序，不足 10 个不凑数。</dd>
+  <dt>⚠️ 数据待核</dt><dd>与我们自己的历史快照比对后数字对不上（例如总星数骤降），只是提示，不代表刷星。</dd>
+  <dt>是什么</dt><dd>每个项目一句话，由 AI 根据官方描述和 README 写一次后缓存；描述或 README 大改时才重写。</dd>
+  <dt>为什么涨</dt><dd>只有找到具体证据（版本发布、官方公告、报道、相关事件）才写，否则不写。</dd>
+</dl></div>
+</main>
+</body>
+</html>

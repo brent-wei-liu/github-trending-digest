@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Repo History</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f4ef;
+  --surface-1: #fcfcfb;
+  --ink: #1c2434;
+  --ink-soft: #4a5670;
+  --ink-mute: #7d869e;
+  --line: rgba(28, 36, 52, 0.10);
+  --line-strong: rgba(28, 36, 52, 0.22);
+  --accent: #2a5fa8;
+  --series-1: #2a78d6;   /* stars line, daily list */
+  --series-2: #eb6834;   /* weekly list */
+  --series-3: #1baf7a;   /* monthly list */
+  --chip-bg: rgba(42, 95, 168, 0.08);
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --font-display: 'Fraunces', Georgia, serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121211;
+    --surface-1: #1a1a19;
+    --ink: #f0efec;
+    --ink-soft: #c3c2b7;
+    --ink-mute: #8e8d86;
+    --line: rgba(240, 239, 236, 0.10);
+    --line-strong: rgba(240, 239, 236, 0.24);
+    --accent: #7fb0f0;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --chip-bg: rgba(127, 176, 240, 0.12);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121211; --surface-1: #1a1a19; --ink: #f0efec; --ink-soft: #c3c2b7; --ink-mute: #8e8d86;
+  --line: rgba(240, 239, 236, 0.10); --line-strong: rgba(240, 239, 236, 0.24); --accent: #7fb0f0;
+  --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --chip-bg: rgba(127, 176, 240, 0.12);
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font-ui);
+       font-size: 15px; line-height: 1.55; }
+main { max-width: 880px; margin: 0 auto; padding: 20px 16px 48px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.back { font-size: 13px; color: var(--ink-mute); }
+h1 { font-family: var(--font-display); font-weight: 600; font-size: 26px; margin: 10px 0 4px;
+     word-break: break-word; }
+h2 { font-size: 15px; font-weight: 600; margin: 28px 0 10px; color: var(--ink-soft);
+     letter-spacing: 0.02em; }
+.what { font-size: 17px; margin: 4px 0 8px; }
+.tags { color: var(--ink-soft); font-size: 13px; display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.chip { display: inline-block; padding: 1px 9px; border-radius: 999px; background: var(--chip-bg);
+        color: var(--ink); font-size: 12.5px; font-weight: 500; border: 1px solid var(--line); }
+.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+.tile .label { font-size: 12px; color: var(--ink-mute); }
+.tile .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .src { font-size: 11.5px; color: var(--ink-mute); }
+@media (max-width: 560px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.toggle { font-size: 12.5px; background: none; border: 1px solid var(--line-strong); color: var(--ink-soft);
+          border-radius: 8px; padding: 2px 10px; cursor: pointer; font-family: inherit; }
+svg text { fill: var(--ink-mute); font-size: 11px; font-family: var(--font-ui); }
+.grid line { stroke: var(--line); }
+.tooltip { position: absolute; pointer-events: none; background: var(--surface-1); color: var(--ink);
+           border: 1px solid var(--line-strong); border-radius: 8px; padding: 6px 9px; font-size: 12.5px;
+           box-shadow: 0 4px 14px rgba(0,0,0,0.12); white-space: nowrap; }
+.tooltip strong { font-variant-numeric: tabular-nums; }
+.chart-wrap { position: relative; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); }
+th { color: var(--ink-mute); font-weight: 500; }
+.timeline-row { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 8px; margin: 3px 0; }
+.timeline-row .name { font-size: 12px; color: var(--ink-soft); }
+.cells { display: grid; gap: 2px; }
+.cell { height: 16px; border-radius: 3px; background: var(--line); }
+.cell.on { cursor: default; }
+.axis-dates { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-mute);
+              margin-left: 52px; }
+.life li, .digests li { margin: 6px 0; }
+.life .date, .digests .date { color: var(--ink-mute); font-variant-numeric: tabular-nums; margin-right: 8px; }
+ul { padding-left: 18px; margin: 0; }
+.muted { color: var(--ink-mute); font-size: 13px; }
+.error { color: #b3261e; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">← GitHub Trending Digest</a>
+  <div id="error" class="error" hidden></div>
+  <header>
+    <h1 id="name">…</h1>
+    <p class="what" id="what"></p>
+    <div class="tags" id="tags"></div>
+  </header>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section>
+    <div class="chart-head"><h2>总星数走势</h2><button class="toggle" id="star-toggle" type="button">数据表</button></div>
+    <div class="card chart-wrap" id="star-chart"></div>
+    <div class="card" id="star-table" hidden></div>
+  </section>
+
+  <section>
+    <h2>上榜记录（近 60 天）</h2>
+    <div class="card" id="timeline"></div>
+  </section>
+
+  <section>
+    <h2>状态变化</h2>
+    <div class="card"><ul class="life" id="life"></ul></div>
+  </section>
+
+  <section>
+    <h2>提到它的日报</h2>
+    <div class="card"><ul class="digests" id="digests"></ul></div>
+  </section>
+
+  <p class="muted" style="margin-top:24px">涨幅与状态的定义见 <a href="/about">口径说明</a>。</p>
+</main>
+<div class="tooltip" id="tip" hidden></div>
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls;
+  if (text != null) e.textContent = text; return e; };
+const fmt = n => n == null ? '—' : Number(n).toLocaleString('en-US');
+const fmtGain = (g, src) => g == null ? '—' :
+  (src === 'own_partial' ? '≥' : '') + (g >= 0 ? '+' : '') + Number(g).toLocaleString('en-US') +
+  (src && src.startsWith('github_') ? '*' : '');
+const SRC_LABEL = { own: '我们的记录', own_interp: '我们的记录（插值）', own_partial: '自首次记录起（下限）',
+  github_daily: 'GitHub 日榜数字', github_weekly: 'GitHub 周榜数字', github_monthly: 'GitHub 月榜数字' };
+const PERIOD = { daily: ['日榜', '--series-1'], weekly: ['周榜', '--series-2'], monthly: ['月榜', '--series-3'] };
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+function showTip(evt, lines) {
+  const tip = $('#tip');
+  tip.replaceChildren(...lines.map((l, i) => { const d = el('div'); if (i === 0) d.append(el('strong', null, l));
+    else d.textContent = l; return d; }));
+  tip.hidden = false;
+  const x = Math.min(evt.pageX + 12, window.scrollX + window.innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px'; tip.style.top = (evt.pageY - tip.offsetHeight - 10) + 'px';
+}
+const hideTip = () => { $('#tip').hidden = true; };
+
+function renderHeader(d) {
+  const p = d.profile, L = d.latest || {};
+  document.title = d.repo;
+  $('#name').textContent = d.repo;
+  $('#what').textContent = p.what_zh || p.description || '';
+  const tags = $('#tags');
+  if (L.status) tags.append(el('span', 'chip', L.status));
+  if (L.milestone) tags.append(el('span', 'chip', L.milestone >= 10000 ? `破 ${L.milestone / 10000} 万星` : `破 ${fmt(L.milestone)} 星`));
+  [p.owner_label, p.language, p.license,
+   p.created_at ? `创建于 ${p.created_at.slice(0, 10)}` : null,
+   p.first_seen ? `首次上榜 ${p.first_seen.slice(0, 10)}` : null].filter(Boolean)
+    .forEach(t => tags.append(el('span', null, t)));
+  const gh = el('a', null, 'GitHub ↗'); gh.href = d.github; gh.target = '_blank'; gh.rel = 'noopener';
+  tags.append(gh);
+}
+
+function renderTiles(d) {
+  const L = d.latest || {};
+  const tiles = [['总星', fmt(L.stars), L.date ? `截至 ${L.date}` : ''],
+    ['今日', fmtGain(L.g1, L.src1), SRC_LABEL[L.src1] || ''],
+    ['7 天', fmtGain(L.g7, L.src7), SRC_LABEL[L.src7] || ''],
+    ['30 天', fmtGain(L.g30, L.src30), SRC_LABEL[L.src30] || '']];
+  $('#tiles').replaceChildren(...tiles.map(([l, v, s]) => {
+    const t = el('div', 'card tile'); t.append(el('div', 'label', l), el('div', 'value', v), el('div', 'src', s));
+    return t; }));
+}
+
+function renderStarChart(d) {
+  const pts = d.stars_merged.map(p => ({ t: new Date(p.date + 'T00:00:00Z'), date: p.date, v: p.stars }));
+  const box = $('#star-chart');
+  if (pts.length < 2) { box.replaceChildren(el('p', 'muted', '记录不足两天，暂无走势。')); return; }
+  const W = box.clientWidth - 32 || 800, H = 220, m = { l: 56, r: 12, t: 10, b: 24 };
+  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+  const pad = (hi - lo) * 0.08 || hi * 0.02 || 1; lo = Math.max(0, lo - pad); hi += pad;
+  const x = t => m.l + (W - m.l - m.r) * ((t - t0) / ((t1 - t0) || 1));
+  const y = v => m.t + (H - m.t - m.b) * (1 - (v - lo) / (hi - lo));
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`); svg.setAttribute('width', '100%');
+  svg.setAttribute('role', 'img'); svg.setAttribute('aria-label', `${d.repo} 总星数走势`);
+  const g = document.createElementNS(ns, 'g'); g.setAttribute('class', 'grid'); svg.append(g);
+  for (let i = 0; i <= 3; i++) {
+    const v = lo + (hi - lo) * i / 3, yy = y(v);
+    const ln = document.createElementNS(ns, 'line');
+    Object.entries({ x1: m.l, x2: W - m.r, y1: yy, y2: yy }).forEach(([k, val]) => ln.setAttribute(k, val));
+    g.append(ln);
+    const tx = document.createElementNS(ns, 'text'); tx.setAttribute('x', m.l - 6); tx.setAttribute('y', yy + 4);
+    tx.setAttribute('text-anchor', 'end'); tx.textContent = Math.round(v).toLocaleString('en-US'); svg.append(tx);
+  }
+  [pts[0], pts[pts.length - 1]].forEach((p, i) => {
+    const tx = document.createElementNS(ns, 'text'); tx.setAttribute('x', x(p.t)); tx.setAttribute('y', H - 6);
+    tx.setAttribute('text-anchor', i ? 'end' : 'start'); tx.textContent = p.date; svg.append(tx);
+  });
+  // Gaps of more than 3 days between observations are drawn as breaks, not interpolated lines.
+  let dPath = '';
+  pts.forEach((p, i) => {
+    const gap = i && (p.t - pts[i - 1].t) / 864e5 > 3;
+    dPath += `${!i || gap ? 'M' : 'L'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`;
+  });
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', dPath); path.setAttribute('fill', 'none'); path.setAttribute('stroke', css('--series-1'));
+  path.setAttribute('stroke-width', '2'); path.setAttribute('stroke-linejoin', 'round'); svg.append(path);
+  // Observations with no neighbour within 3 days would be invisible as a path: draw them as dots.
+  pts.forEach((p, i) => {
+    const near = q => q && Math.abs(q.t - p.t) / 864e5 <= 3;
+    if (near(pts[i - 1]) || near(pts[i + 1])) return;
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('cx', x(p.t)); c.setAttribute('cy', y(p.v)); c.setAttribute('r', 3);
+    c.setAttribute('fill', css('--series-1')); svg.append(c);
+  });
+  const hair = document.createElementNS(ns, 'line'); hair.setAttribute('stroke', css('--line-strong'));
+  hair.setAttribute('y1', m.t); hair.setAttribute('y2', H - m.b); hair.style.display = 'none'; svg.append(hair);
+  const dot = document.createElementNS(ns, 'circle'); dot.setAttribute('r', 4.5); dot.setAttribute('fill', css('--series-1'));
+  dot.setAttribute('stroke', css('--surface-1')); dot.setAttribute('stroke-width', 2); dot.style.display = 'none'; svg.append(dot);
+  const hit = document.createElementNS(ns, 'rect');
+  Object.entries({ x: m.l, y: 0, width: W - m.l - m.r, height: H, fill: 'transparent' }).forEach(([k, v]) => hit.setAttribute(k, v));
+  svg.append(hit);
+  hit.addEventListener('pointermove', evt => {
+    const r = svg.getBoundingClientRect(), px = (evt.clientX - r.left) * (W / r.width);
+    let best = pts[0]; pts.forEach(p => { if (Math.abs(x(p.t) - px) < Math.abs(x(best.t) - px)) best = p; });
+    const bx = x(best.t);
+    hair.setAttribute('x1', bx); hair.setAttribute('x2', bx); hair.style.display = '';
+    dot.setAttribute('cx', bx); dot.setAttribute('cy', y(best.v)); dot.style.display = '';
+    showTip(evt, [`⭐ ${fmt(best.v)}`, best.date]);
+  });
+  hit.addEventListener('pointerleave', () => { hair.style.display = 'none'; dot.style.display = 'none'; hideTip(); });
+  box.replaceChildren(svg);
+
+  const tbl = el('table'); const head = el('tr');
+  ['日期', '总星', '来源'].forEach(h => head.append(el('th', null, h))); tbl.append(head);
+  d.star_history.slice().reverse().forEach(r => { const tr = el('tr');
+    [r.date, fmt(r.stars), r.source === 'api' ? 'GitHub API' : 'Trending 页面'].forEach(c => tr.append(el('td', null, c)));
+    tbl.append(tr); });
+  $('#star-table').replaceChildren(tbl);
+}
+
+function renderTimeline(d) {
+  const end = d.latest ? new Date(d.latest.date + 'T00:00:00Z') : new Date();
+  const days = [...Array(60).keys()].map(i => new Date(end - (59 - i) * 864e5).toISOString().slice(0, 10));
+  const by = {}; d.lists.forEach(l => { by[l.period + l.date] = l; });
+  const box = $('#timeline'); box.replaceChildren();
+  Object.entries(PERIOD).forEach(([p, [label, color]]) => {
+    const row = el('div', 'timeline-row'); row.append(el('div', 'name', label));
+    const cells = el('div', 'cells'); cells.style.gridTemplateColumns = `repeat(${days.length}, 1fr)`;
+    days.forEach(day => {
+      const c = el('div', 'cell'); const hitp = by[p + day];
+      if (hitp) {
+        c.classList.add('on'); c.style.background = `var(${color})`;
+        c.addEventListener('pointermove', evt => showTip(evt, [`${label}第 ${hitp.rank}`, `${day} · +${fmt(hitp.delta)}`]));
+        c.addEventListener('pointerleave', hideTip);
+        c.setAttribute('aria-label', `${day} ${label}第 ${hitp.rank}`);
+      }
+      cells.append(c);
+    });
+    row.append(cells); box.append(row);
+  });
+  const ax = el('div', 'axis-dates'); ax.append(el('span', null, days[0]), el('span', null, days[days.length - 1]));
+  box.append(ax);
+  if (!d.lists.length) box.append(el('p', 'muted', '没有上榜记录。'));
+}
+
+function renderLife(d) {
+  const ul = $('#life'); ul.replaceChildren();
+  const rows = d.lifecycle.filter(r => r.status || r.milestone).reverse();
+  if (!rows.length) { ul.append(el('li', 'muted', '近 30 天没有状态变化。')); return; }
+  let prev = null;
+  // Show transitions only (a status repeated on consecutive days is listed once, at its start).
+  const chrono = d.lifecycle.slice();
+  const items = [];
+  chrono.forEach(r => {
+    if ((r.status && r.status !== prev) || r.milestone) items.push(r);
+    prev = r.status;
+  });
+  items.reverse().forEach(r => {
+    const li = el('li'); li.append(el('span', 'date', r.date));
+    if (r.status) li.append(el('span', 'chip', r.status), document.createTextNode(' '));
+    if (r.milestone) li.append(el('span', 'chip', r.milestone >= 10000 ? `破 ${r.milestone / 10000} 万星` : `破 ${fmt(r.milestone)} 星`), document.createTextNode(' '));
+    if (r.reason) li.append(el('span', 'muted', r.reason));
+    ul.append(li);
+  });
+}
+
+function renderDigests(d) {
+  const ul = $('#digests'); ul.replaceChildren();
+  if (!d.digests.length) { ul.append(el('li', 'muted', '还没有日报提到它。')); return; }
+  const SHOW = 15;
+  d.digests.forEach((g, i) => { const li = el('li'); const a = el('a', null, `${g.date} 日报`);
+    a.href = `/?digest=${g.id}`; li.append(a); if (i >= SHOW) li.hidden = true; ul.append(li); });
+  if (d.digests.length > SHOW) {
+    const more = el('button', 'toggle', `显示全部 ${d.digests.length} 期`); more.type = 'button';
+    more.addEventListener('click', () => { ul.querySelectorAll('li[hidden]').forEach(li => { li.hidden = false; });
+      more.remove(); });
+    const li = el('li'); li.style.listStyle = 'none'; li.append(more); ul.append(li);
+  }
+}
+
+$('#star-toggle').addEventListener('click', () => {
+  const t = $('#star-table'), c = $('#star-chart'); const showTable = t.hidden;
+  t.hidden = !showTable; c.hidden = showTable; $('#star-toggle').textContent = showTable ? '图表' : '数据表';
+});
+
+(async function init() {
+  const parts = location.pathname.split('/').filter(Boolean);   // ['repo', owner, name]
+  try {
+    const r = await fetch(`/api/project/${encodeURIComponent(parts[1])}/${encodeURIComponent(parts[2])}`);
+    if (!r.ok) throw new Error(r.status === 404 ? '没有这个项目的记录。' : `加载失败（${r.status}）`);
+    const d = await r.json();
+    renderHeader(d); renderTiles(d); renderStarChart(d); renderTimeline(d); renderLife(d); renderDigests(d);
+  } catch (e) {
+    $('#error').textContent = e.message; $('#error').hidden = false;
+  }
+})();
+</script>
+</body>
+</html>
