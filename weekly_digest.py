@@ -11,6 +11,8 @@ Usage:
   python3 weekly_digest.py query  [--date D]
   python3 weekly_digest.py render LLM.json [--date D]
   python3 weekly_digest.py check  FILE.md [--date D]
+  python3 weekly_digest.py factcheck-prompt LLM.json [--date D]
+  python3 weekly_digest.py apply-factcheck LLM.json VERDICTS.json OUT.json [--date D]
   python3 weekly_digest.py save-summary [--date D]     # markdown on stdin, period 'weekly'
 """
 
@@ -195,6 +197,9 @@ def render_prompts(p):
 
 ## 3. 本周观察（themes）
 正好 3 条：短标题（≤12 字）+ 一句话（≤60 字）+ 2–4 个相关项目（必须来自上面列出的项目）。写模式和洞察，不复述数字。
+- 只写能从所列项目的「是什么」直接看出的共同点；不要概括开发者行为或市场趋势（如「开发者都在…」「成了刚需」），除非你有出处。
+- 标题必须准确覆盖每个所列项目；对不上就换项目或改标题。
+- why 若只靠例行补丁、非官方/社区构建，或证据发生在上涨之后（含聚合站在上榜后的介绍），写空。
 
 ## 输出
 只输出一个 JSON 对象：
@@ -205,6 +210,41 @@ writeups 的键必须正好是：{json.dumps(p['writeup'], ensure_ascii=False)}
 
 
 # ---------- validate / render / check ----------
+
+def factcheck_prompt(llm, p):
+    """Same contract as digest_v2.factcheck_prompt: only the writer's new claims."""
+    claims = [{"id": f"why:{n}", "repo": n, "claim": x["why"].strip(), "context": p["repos"][n]["what"]}
+              for n, x in (llm.get("writeups") or {}).items() if (x or {}).get("why", "").strip()]
+    claims += [{"id": f"theme:{i}", "claim": f"{th.get('title')}：{th.get('text')}",
+                "repos": {r: p["repos"][r]["what"] for r in th.get("repos") or [] if r in p["repos"]}}
+               for i, th in enumerate(llm.get("themes") or [])]
+    claims.append({"id": "overview", "claim": llm.get("overview", "")})
+    return v2.factcheck_prompt({"why": {}, "themes": []}, {"meta": p["meta"], "repos": {}}).split("待核查：")[0] + \
+        "待核查：\n" + json.dumps(claims, ensure_ascii=False, indent=1)
+
+
+def apply_factcheck(llm, verdicts):
+    out = json.loads(json.dumps(llm))
+    problems = []
+    for cid, v in verdicts.items():
+        kind, _, key = cid.partition(":")
+        verdict = (v or {}).get("verdict")
+        if kind == "why" and key in out.get("writeups", {}):
+            if verdict == "drop":
+                out["writeups"][key]["why"] = ""
+            elif verdict == "fix":
+                out["writeups"][key]["why"] = (v.get("text") or "").strip()
+        elif kind == "theme" and key.isdigit() and int(key) < len(out.get("themes", [])):
+            th = out["themes"][int(key)]
+            if verdict == "fix" and v.get("text"):
+                t = v["text"].strip()
+                th["title"], th["text"] = ([x.strip() for x in t.split("：", 1)] if "：" in t else (th["title"], t))
+            elif verdict == "drop":
+                problems.append(f"theme {key} dropped by fact-check: {v.get('note')}")
+        elif cid == "overview" and verdict == "fix" and v.get("text"):
+            out["overview"] = v["text"].strip()
+    return out, problems
+
 
 def validate_llm(llm, p):
     probs = []
@@ -357,6 +397,15 @@ def main(argv=None):
             print(json.dumps({"ok": False, "problems": probs}, ensure_ascii=False, indent=1))
             return 1
         sys.stdout.write(render(p, llm))
+    elif cmd == "factcheck-prompt":
+        print(factcheck_prompt(json.load(open(argv[1], encoding="utf-8")), p))
+    elif cmd == "apply-factcheck":        # apply-factcheck LLM.json VERDICTS.json OUT.json
+        merged, probs = apply_factcheck(json.load(open(argv[1], encoding="utf-8")),
+                                        json.load(open(argv[2], encoding="utf-8")))
+        probs += validate_llm(merged, p)
+        json.dump(merged, open(argv[3], "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        print(json.dumps({"ok": not probs, "problems": probs}, ensure_ascii=False, indent=1))
+        return 0 if not probs else 1
     elif cmd == "check":
         rep = check(open(argv[1], encoding="utf-8").read(), p)
         print(json.dumps(rep, ensure_ascii=False, indent=1))

@@ -131,3 +131,19 @@ def test_fmt_gain_marks_sources():
     assert v2.fmt_gain(4_000, "own_partial") == "≥+4,000"
     assert v2.fmt_gain(1_234, "own_interp") == "+1,234"
     assert v2.fmt_gain(None, None) == "—"
+
+
+def test_factcheck_prompt_and_apply(conn):
+    p = v2.build_payload(conn, DAY)
+    llm = _llm(p, why={**{n: "" for n in p["prompts"]["why_keys"]}, "n/new": "11 月 19 日发布 v1.0"})
+    prompt = v2.factcheck_prompt(llm, p)
+    assert '"why:n/new"' in prompt and '"theme:0"' in prompt and "why:o/sp" not in prompt
+    merged, probs = v2.apply_factcheck(llm, {
+        "why:n/new": {"verdict": "drop"},
+        "theme:1": {"verdict": "fix", "text": "新标题：改过的一句话"},
+        "theme:2": {"verdict": "keep"}})
+    assert merged["why"]["n/new"] == "" and probs == []
+    assert (merged["themes"][1]["title"], merged["themes"][1]["text"]) == ("新标题", "改过的一句话")
+    assert llm["why"]["n/new"] == "11 月 19 日发布 v1.0"          # input untouched
+    _, probs = v2.apply_factcheck(llm, {"theme:0": {"verdict": "drop", "note": "无依据"}})
+    assert probs == ["theme 0 dropped by fact-check: 无依据"]

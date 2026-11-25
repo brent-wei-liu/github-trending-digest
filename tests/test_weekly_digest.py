@@ -56,3 +56,15 @@ def test_unknown_last_week_is_not_called_an_entrant(conn):  # noqa: F811
         assert p["repos"][n]["prev_known"]
     r = p["repos"]["n/new"]
     assert "上周无 30 天数据" in wk.facts_line(r) or r["rank_prev"]
+
+
+def test_weekly_factcheck(conn):  # noqa: F811
+    p = wk.build_payload(conn, DAY)
+    llm = _llm(p)
+    llm["writeups"][p["month"][0]]["why"] = "11 月 19 日发布 v2.0"
+    prompt = wk.factcheck_prompt(llm, p)
+    assert f'"why:{p["month"][0]}"' in prompt and '"theme:2"' in prompt and '"overview"' in prompt
+    merged, probs = wk.apply_factcheck(llm, {f"why:{p['month'][0]}": {"verdict": "drop"},
+                                             "overview": {"verdict": "fix", "text": "改写后的概览。"}})
+    assert merged["writeups"][p["month"][0]]["why"] == "" and merged["overview"] == "改写后的概览。"
+    assert wk.validate_llm(merged, p) == [] and probs == []

@@ -1,53 +1,45 @@
 # GitHub Trending Digest
 
-Scrape GitHub Trending across daily / weekly / monthly periods, store in SQLite, and generate a daily Chinese-language digest using a three-step Draft → Critique → Refine reflection pipeline orchestrated by Claude Code skills. Includes a frosted-glass web UI to browse repos and historical digests on desktop or phone.
+Scrape GitHub Trending (daily / weekly / monthly lists), record our own star history for every repo seen in the last 30 days, and send a self-contained Chinese digest every day plus a deeper report every Monday. Python computes every fact (our own 1d/7d/30d gains, lifecycle statuses, rankings, numbers); the LLM only writes 为什么涨 (evidence-only), three themes and missing one-line 是什么, and a second agent fact-checks just those claims. A web UI shows each project's star trend, list timeline and status history. Design and verification history: `docs/redesign-log.md`.
 
 ## 架构
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  Claude Code Scheduled Tasks                                     │
-│                                                                  │
-│  ┌────────────────────────┐    ┌─────────────────────────────┐   │
-│  │ github-trending-fetch  │    │ github-trending-digest      │   │
-│  │ daily 09:30 PT         │    │ daily 11:30 PT              │   │
-│  │                        │    │                             │   │
-│  │ python3 github_fetch.py│    │  github-trending-digest     │   │
-│  │   daily/weekly/monthly │    │  skill:                     │   │
-│  │       ↓                │    │   1. fetcher refresh        │   │
-│  │   SQLite repos +       │    │   2. digest_generate query  │   │
-│  │   trending_entries     │    │   3. Draft subagent         │   │
-│  └────────────────────────┘    │   4. Critique (isolated)    │   │
-│                                │   5. Refine subagent        │   │
-│                                │   6. save-summary           │   │
-│                                │   7. email_sender.py (SMTP) │   │
-│                                │      (md + htmlBody)        │   │
-│                                └─────────────────────────────┘   │
-│                                              ↓                   │
-│  ┌─────────────────────────────────────────────────────────────┐ │
-│  │ FastAPI web UI (:8082)                                      │ │
-│  │   browse repos by period · star · search · view digests     │ │
-│  └─────────────────────────────────────────────────────────────┘ │
-└──────────────────────────────────────────────────────────────────┘
+09:30 PT  github-trending-fetch   python3 github_fetch.py
+            scrape 3 lists → repos / trending_entries
+            repo_meta (created_at, license, owner type) + latest release      (repo_meta.py)
+            one GitHub API star reading per active repo → star_history       (star_history.py)
+            README excerpts (7-day cache) → projects                         (project_memory.py)
+            today's lifecycle status per repo → lifecycle                    (lifecycle.py)
+
+11:30 PT  github-trending-digest  skill .claude/skills/github-trending-digest
+            digest_v2.py query → writer agent (JSON) → fact-check agent (claims only)
+            → apply-factcheck → render → check → save-summary → email_sender.py
+
+Mon 11:45 PT  github-trending-weekly  skill .claude/skills/github-trending-weekly
+            weekly_digest.py: 本月/本周 Top 10, 深读, 周涨跌, 状态事件 → email_sender.py --kind weekly
+
+FastAPI UI :8082   repo list · digests · /repo/<owner>/<name> project pages · /about
 ```
 
 ## File structure
 
 ```
 github-trending-digest/
-├── github_fetch.py        # scrape https://github.com/trending HTML
-├── repo_meta.py           # GitHub API metadata (created_at, license, owner type) + latest release/tag, cached in repo_meta / repo_release
-├── digest_generate.py     # today's payload (涨星榜/新锐榜 order, stats lines, ⚠️ 数据待核 flags) + 3-step prompts; `check` validates a digest
-├── db.py                  # SQLite schema + migrations
-├── api.py                 # FastAPI server (port 8082)
-├── data/
-│   └── gh_trending.db     # SQLite (gitignored)
-├── static/
-│   └── index.html         # single-file UI (organic glassmorphism)
-├── .claude/skills/
-│   └── github-trending-digest/SKILL.md   # 8-step orchestration
-├── schedules.yaml         # declarative scheduled-task definitions
-└── README.md
+├── github_fetch.py        # scrape trending + run the per-day data steps below
+├── star_history.py        # own star history; 1d/7d/30d gains with source labels
+├── lifecycle.py           # deterministic statuses: 新上榜/爆发/回榜/掉榜/降温/持续走红 + 里程碑
+├── project_memory.py      # cached 是什么 per repo, README excerpts, profile()
+├── repo_meta.py           # GitHub API metadata + latest release/tag
+├── digest_v2.py           # daily payload / writer prompt / fact-check / render / check / save
+├── weekly_digest.py       # Monday report, same contract
+├── digest_generate.py     # v1 digest (kept for its helpers: anomaly rules, number formatting)
+├── email_sender.py        # Gmail SMTP; --kind daily|weekly (own subject + dedupe key)
+├── db.py / api.py         # SQLite schema, FastAPI server (GH_TRENDING_PORT, default 8082)
+├── static/                # index.html (lists + digests), repo.html (project page), about.html
+├── docs/redesign-log.md   # what was built and how each phase was verified
+├── .claude/skills/        # github-trending-digest (daily), github-trending-weekly
+└── schedules.yaml
 ```
 
 ## Quick start
@@ -66,15 +58,18 @@ github-trending-digest/
 - **focus_profiles** — saved filter configs (default / ai-ml / rust-go / frontend); choose which profile each digest uses.
 - **subscribers** — historical email subscriber list (legacy from cron mailer; not used by the current delivery path).
 
-## Three-step isolated reflection
+## Writer + targeted fact-check
 
-| Step | Subagent | Sees | Produces |
-|------|----------|------|----------|
-| Draft | #1 | trending repo data + format spec | first-pass digest |
-| Critique | #2 | **only the draft text** | A/B/C grade + line-level edits |
-| Refine | #3 | draft + critique | final digest |
+| Step | Who | Sees | Produces |
+|------|-----|------|----------|
+| payload | Python | DB | every number, status, ranking, link, 是什么 |
+| writer | agent #1 | payload prompt | JSON: 为什么涨 (evidence-only or empty), 3 themes, missing 是什么 |
+| fact-check | agent #2 | **only the writer's new claims** | keep / drop / fix per claim |
+| render + check | Python | payload + JSON | final markdown; rejects edited numbers, foreign links, star numbers as reasons, fake statuses |
 
-Each subagent is isolated via the Claude Code `Agent` (Task) tool, so the Critique subagent is structurally prevented from seeing the original repo list — it must judge the prose on its own merits, which catches lazy categorization and generic descriptions a single-pass writer would miss.
+This replaced Draft → Critique → Refine after a same-data comparison (Phase 6 in
+`docs/redesign-log.md`): ~26 % of the wall time and ~59 % of the tokens with output at
+least as clean.
 
 ## Web UI
 

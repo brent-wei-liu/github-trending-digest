@@ -257,3 +257,41 @@ to keep the digest informative when GitHub's lists barely move.
 - Quality caveat: theme 1's 「开发者同时用多个编程 Agent … 成了刚需」 is an unsupported
   generalisation that validation can't catch; Phase 6 decides whether a critique /
   fact-check step is worth its cost.
+
+## Phase 6 — pipeline simplification (2026-11-25)
+
+Same data (2026-11-24 payload), three runs:
+
+| Pipeline | Agents | Wall time | Web calls | Tokens | Outcome |
+|---|---|---|---|---|---|
+| A: Draft → Critique → Refine | 3 | 50 + 111 + 70 = 231 s | 2 + 8 + 0 = 10 | 61k + 70k + 65k = 196k | critique B; refine fixed all 5 issues |
+| B1: writer → targeted fact-check (old prompts) | 2 | 50 + 42 = 92 s | 2 + 2 = 4 | 61k + 59k = 120k | caught BugHunter's false cause; half-fixed dsh; missed 3 theme/term issues |
+| B2: writer → targeted fact-check (tightened prompts) | 2 | 38 + 22 = 60 s | 2 + 0 = 2 | 61k + 54k = 115k | writer avoided all 5 issues; fact-check: 3 × keep |
+
+The five issues the critique found in A's draft: BugHunter's 为什么涨 cited aggregator
+coverage that came after its rise; dsh's cited an unofficial community build;
+app-store-compliance used the wrong term; theme 1 put a reverse-engineering tool under
+「审计」; theme 2 claimed 「开发者同时用多个编程 Agent」 without a source and grouped a
+model switcher with agent consoles. B2's writer prompt now names exactly these failure
+types (weak/after-the-fact evidence, unsourced behaviour/market claims, titles that
+don't cover every repo) and the fact-checker's prompt checks for them. B2 left all four
+为什么涨 empty (no evidence predating the rise) and wrote three themes the fact-checker
+kept; `check` ok; 7,539 chars, 31,177 B MIME.
+
+**Decision: B (single writer + Python validation + targeted fact-check of the new
+claims only).** It costs ~26 % of A's wall time, ~59 % of the tokens and a fifth of the
+web calls on this data, and with the tightened prompts its output was at least as
+clean. The critic's main value was catching the categories now written into both
+prompts. Python still owns every fact and `validate_llm` / `check` gate both steps.
+
+Caveats: one comparison day; B's quality depends on those prompt rules, and a novel
+error type would now only be caught if the fact-checker spots it. The weekly report
+uses the same writer contract (its writer-only run on 11-23 had one unsupported
+generalisation in a theme, which the tightened theme rules target; the weekly
+scheduled task runs the fact-check step too).
+
+Weekly with the same contract (11-23 report, writer then fact-check: 0 web calls; it
+used `gh release view`): kept 1 为什么涨, rewrote 2 bare-version ones with what the
+release actually added, dropped 2 routine patches, and rewrote all three themes,
+removing the unsourced 「刚需」 claim and two mis-grouped projects (astryx is a design
+system, sherlock an OSINT tool). `apply-factcheck` + `check` ok.

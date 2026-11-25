@@ -13,9 +13,14 @@
   skill: null
   script: cd {{REPO}} && python3 github_fetch.py
   frequency: daily 09:30 PT
-  description: Scrape GitHub Trending HTML for daily / weekly / monthly periods into SQLite (single invocation handles all 3). No GitHub API token needed.
+  description: Scrape GitHub Trending (3 lists) into SQLite, then record star history, README excerpts and lifecycle statuses (uses the gh token for the GitHub API).
 
 - name: github-trending-digest
   skill: .claude/skills/github-trending-digest
   frequency: daily 11:30 PT
-  description: Three-step Draft / Critique / Refine reflection digest of today's trending repos. Save to summaries table + send via email_sender.py (Gmail SMTP; falls back to a Gmail draft via MCP).
+  description: Daily v2 digest (writer + targeted fact-check, Python renders/checks). Save to summaries table + send via email_sender.py (Gmail SMTP; falls back to a Gmail draft via MCP).
+
+- name: github-trending-weekly
+  skill: .claude/skills/github-trending-weekly
+  frequency: weekly Monday 11:45 PT
+  description: Weekly deep report (本月/本周 Top 10 by our own gains, 深读, movers, lifecycle events). Sends with `email_sender.py --kind weekly` (subject 「GitHub Trending 周报 YYYY-MM-DD」).
