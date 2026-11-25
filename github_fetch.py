@@ -167,6 +167,17 @@ def cmd_fetch(conn, args=None):
     except Exception as e:  # never fail the scrape over it
         stats["star_history"] = {"error": f"{type(e).__name__}: {e}"}
 
+    # Project memory (README excerpts, TTL 7 days) and today's lifecycle statuses.
+    try:
+        import lifecycle
+        import project_memory
+        rd = project_memory.refresh_readmes(conn, star_history.active_repos(conn, today),
+                                            repo_meta.get_token())
+        stats["readme"] = {"fetched": rd["fetched"], "failed": len(rd["failed"])}
+        stats["lifecycle"] = {"repos": len(lifecycle.refresh(conn, today))}
+    except Exception as e:
+        stats["lifecycle"] = {"error": f"{type(e).__name__}: {e}"}
+
     import zoneinfo
     local_hour = datetime.now(zoneinfo.ZoneInfo("America/Los_Angeles")).hour
     if report_hour is not None:

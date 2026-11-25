@@ -71,11 +71,15 @@ def test_backfill_takes_latest_scrape_per_day_and_skips_zero():
         [("a/b", "2026-11-19", 120, "trending")]
 
 
-def test_api_reading_wins_over_trending_same_day():
+def test_same_day_trending_total_preferred_unless_it_disagrees():
     c = _db()
     c.execute("INSERT INTO star_history VALUES ('a/b','2026-11-20',100,'trending','t',NULL)")
     c.execute("INSERT INTO star_history VALUES ('a/b','2026-11-20',104,'api','t',NULL)")
-    assert sh.observations(c, "a/b") == {D: 104}
+    c.execute("INSERT INTO star_history VALUES ('a/b','2026-11-19',50,'trending','t',NULL)")
+    c.execute("INSERT INTO star_history VALUES ('a/b','2026-11-19',90,'api','t',NULL)")
+    c.execute("INSERT INTO star_history VALUES ('a/b','2026-11-18',80,'api','t',NULL)")
+    from datetime import timedelta
+    assert sh.observations(c, "a/b") == {D: 100, D - timedelta(days=1): 90, D - timedelta(days=2): 80}
 
 
 class FakeAPI:

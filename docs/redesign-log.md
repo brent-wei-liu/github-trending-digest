@@ -52,3 +52,70 @@ The daily pipeline on `main` keeps running and sending until the redesign is ver
   in after a week of daily API readings).
 - 2026-11-20 by our 30d gain: all 10 repos of the v2code monthly Top 10 are in our top 12
   (the other two: obra/superpowers, meta/astryx).
+
+### Note: "zero churn" since 11-19 is GitHub, not the scraper
+
+From 11-19 to 11-24 the daily list held the same 16 repos and the weekly list the
+same 13 (monthly grew 17 → 19). Re-fetched live with a cache-busting query, a no-cache
+header and a different user agent on 11-25: the same membership and order, but with
+updated numbers (Claude-BugHunter +1,833 at our scrape → +1,826 live), so it's not a
+cached page. Main needed no fix. The redesign's own 30d ranking and 「今日变化」 are meant
+to keep the digest informative when GitHub's lists barely move.
+
+## Phase 2 — project memory + lifecycle (2026-11-25)
+
+**Built**
+- `lifecycle.py`, table `lifecycle(repo, date, status, milestone, g1/g7/g30 + sources,
+  stars, listed, reason)`. Primary status, first match wins ("listed" = on any list):
+  - 新上榜: listed today, never listed before in our records
+  - 爆发: 1d ≥ +1,000 and ≥ 3× the average daily gain over the week before (from own
+    observations; an unknown pace counts as 0)
+  - 回榜: listed today, not on the previous scrape day, listed earlier (pairs with 掉榜;
+    added for come-and-go repos)
+  - 掉榜: listed on the previous scrape day, not today
+  - 降温: complete 30d window (own / own_interp / github_monthly) with ≥ 300/day and 7d
+    pace ≤ 0.5 × the 30d pace
+  - 持续走红: 7d average ≥ 500/day, listed ≥ 5 of the last 7 scrape days, and today's 1d
+    ≥ 250 when known (one spike inside the window isn't "sustained")
+
+  Flag 里程碑: the total crossed 1k/5k/10k/20k/50k/100k/200k/300k/500k/1M since the
+  previous own observation (≤ 3 days old). Backfilled for 30 scrape days (0.5 s).
+- `project_memory.py`, table `projects`: cached 是什么 (one sentence, validated: Chinese,
+  ≤ 60 chars, one sentence, no star numbers), the description + README excerpt it was
+  written from, and README excerpts (API, TTL 7 days). `profile()` joins first_seen
+  (first trending appearance), owner type, language, license and created_at. A sentence
+  is regenerated only when the description or README token-Jaccard similarity drops
+  below 0.6; the old sentence is passed in as context.
+- `github_fetch.py` now also refreshes READMEs and today's lifecycle after the scrape.
+
+**Verified**
+- Tests: 13 lifecycle tests (rule table; superpowers-like come-and-go → 掉榜 on the
+  day after leaving, nothing while absent, 回榜 on return; monthly giant → 持续走红 then
+  降温; one-day spike → 爆发, then nothing the next day; brand-new repo → 新上榜 + 里程碑;
+  prior pace from consecutive readings), 6 project-memory tests (cache reuse, cosmetic
+  edit kept, pivot regenerates, README change regenerates, empty description, README
+  TTL / 404). Full suite: 78 passed.
+- Bugs found and fixed during verification:
+  - A one-day spike made the repo 持续走红 for the following week → added the today ≥ 250
+    condition.
+  - 爆发 fired with "此前无日均数据" for repos that had 5 consecutive daily totals
+    (no exact D−7 reading) → previous pace is now computed from the observations
+    themselves.
+  - In this verification run the API reading was ~11 h newer than the trending total
+    and inflated 1d gains → a same-day trending total (read at the same moment as
+    GitHub's lists) now wins when it agrees with the API within 5 %.
+  - Empty descriptions made 是什么 look stale on every run → basis format fixed.
+- Real data, 2026-11-24: 持续走红 9 (t3code, impeccable, hallmark, superpowers,
+  hyperframes, BugHunter, ffmpeg-skill, last30days, minimind), 降温 3
+  (security-audit: 7d +461/day vs 30d +1,048/day; DeepTutor; claude-mem), 新上榜 1
+  (Ebony-Vinyl/dsh-our-free-model), milestones: anthropics/skills 破 20 万,
+  BugHunter 破 2 万, app-store-compliance 破 5,000. No 回榜/掉榜 since 11-20 is correct
+  (GitHub's lists didn't change).
+- obra/superpowers timeline: 持续走红 to 11-07 → 掉榜 11-08 → (absent) → 回榜 11-17 →
+  持续走红 from 11-21.
+- 2026-11-20, v2code's ten: 7 持续走红, 3 降温 (security-audit, DeepTutor, claude-mem).
+- 是什么 seeded once for all 194 active repos by two writer agents (~181k tokens in
+  total, one-off): 194 saved, 0 rejected by validation, length 10–60 chars (avg 41).
+  Spot-checked 22, all accurate to the README; none mention star numbers.
+- Smoke run of the full `github_fetch.py` on a scratch DB copy: 186 star readings,
+  0 README refetches (cached), 187 lifecycle rows, ~2 min.

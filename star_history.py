@@ -45,7 +45,7 @@ TIMEOUT = 15
 ACTIVE_DAYS = 30           # record every repo seen on any list in the last 30 days
 MIN_REMAINING = 50         # stop recording when the rate-limit budget gets this low
 WINDOWS = {1: 0, 7: 1, 30: 3}   # N-day gain → allowed baseline slack (days)
-DISAGREE = 0.05            # api vs trending total on the same day: >5% apart → keep api only
+DISAGREE = 0.05            # api vs trending total on the same day: >5% apart → use api
 
 SRC_OWN, SRC_INTERP, SRC_PARTIAL = "own", "own_interp", "own_partial"
 INTERP_MAX_GAP = {1: 0, 7: 14, 30: 30}   # max days between the two bracketing observations
@@ -167,15 +167,20 @@ def record_api(conn, names, token=None, getter=api_get, today=None, now=None):
 # ---------- gains ----------
 
 def observations(conn, repo):
-    """{date: stars} using one own total per day: api preferred; trending kept only
-    when it agrees with api (within DISAGREE) or there is no api reading that day."""
+    """{date: stars}, one own total per day. The trending-page total is preferred (it was
+    read at the same moment as GitHub's lists) when it agrees with the API reading
+    within DISAGREE; if they disagree, the API reading wins; otherwise whichever exists."""
     by_day = {}
     for d, stars, src in conn.execute(
             "SELECT date, stars, source FROM star_history WHERE repo = ?", (repo,)):
         by_day.setdefault(d, {})[src] = stars
     out = {}
     for d, s in by_day.items():
-        out[date.fromisoformat(d)] = s.get("api", s.get("trending"))
+        a, t = s.get("api"), s.get("trending")
+        if a is not None and t is not None:
+            out[date.fromisoformat(d)] = t if abs(a - t) <= DISAGREE * max(a, 1) else a
+        else:
+            out[date.fromisoformat(d)] = a if a is not None else t
     return out
 
 
